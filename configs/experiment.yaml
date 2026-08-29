@@ -1,0 +1,31 @@
+seed: 42
+
+model:
+  name: facebook/esm2_t6_8M_UR50D
+  device: auto
+  batch_size: 16
+
+data:
+  assay: tem1_firnberg
+  path: data/processed/tem1_firnberg.csv
+  sequence_column: mutated_sequence
+  mutation_column: mutant
+  fitness_column: DMS_score
+  directionality: 1
+
+scoring:
+  strategy: masked_marginal
+  output_path: artifacts/tem1_firnberg/zero_shot_scores.csv
+
+circuit:
+  backend: protomech
+  checkpoint: checkpoints/protomech/esm2_8m
+  attribution: activation_x_gradient
+  top_k_fractions: [0.001, 0.005, 0.01, 0.05, 0.1]
+  random_trials: 20
+
+analysis:
+  residue_aggregation: median
+  intolerant_fraction: 0.1
+  bootstrap_samples: 1000
+  output_dir: artifacts/tem1_firnberg
