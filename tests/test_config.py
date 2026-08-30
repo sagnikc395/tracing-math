@@ -11,8 +11,10 @@ def test_default_config_is_valid() -> None:
     assert config.data.splits == ("gsm8k", "math", "olympiadbench", "omnimath")
     assert 0.0 in config.intervention.alphas
     assert config.probe.primary_family == "l2"
-    assert {family.name for family in config.probe.families} == {"l2", "l1", "elastic_net"}
-    assert config.probe.diagnostic_targets == ("error_onset",)
+    assert {family.name for family in config.probe.families} == {"l2"}
+    assert config.probe.diagnostic_targets == ()
+    assert config.probe.pca_dimensions == ()
+    assert config.analysis.exploratory_bootstrap_samples == 0
     assert config.analysis.localization_tolerances == (0, 1, 2)
 
 

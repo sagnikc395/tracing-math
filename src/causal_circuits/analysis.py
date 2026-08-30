@@ -348,14 +348,15 @@ def fit_layer_probes(
         layer_predictions["label"] = labels[masks["test"]]
         layer_predictions["score"] = test_scores
         prediction_rows.append(layer_predictions)
-        validation_predictions = metadata.loc[
-            masks["validation"],
-            ["trace_id", "step_index", "first_error", "source", "generator"],
-        ].copy()
-        validation_predictions["layer"] = layer
-        validation_predictions["label"] = labels[masks["validation"]]
-        validation_predictions["score"] = validation_scores
-        validation_prediction_rows.append(validation_predictions)
+        if analysis_config.exploratory_bootstrap_samples > 0:
+            validation_predictions = metadata.loc[
+                masks["validation"],
+                ["trace_id", "step_index", "first_error", "source", "generator"],
+            ].copy()
+            validation_predictions["layer"] = layer
+            validation_predictions["label"] = labels[masks["validation"]]
+            validation_predictions["score"] = validation_scores
+            validation_prediction_rows.append(validation_predictions)
 
     metrics = pd.DataFrame(metrics_rows)
     validation = metrics[metrics["split"] == "validation"].sort_values(
@@ -405,48 +406,64 @@ def fit_layer_probes(
         seed=seed,
         analysis_config=analysis_config,
     )
-    family_metrics, family_predictions, diagnostic_metrics = _fit_exploratory_probes(
-        activations,
-        metadata,
-        config,
-        analysis_config,
-        primary_metrics=metrics,
-        primary_predictions=pd.concat(prediction_rows, ignore_index=True),
-        seed=seed,
-    )
-    validation_predictions = pd.concat(validation_prediction_rows, ignore_index=True)
-    selected_validation = validation_predictions[
-        validation_predictions["layer"] == selected_layer
-    ].copy()
-    threshold_sensitivity = threshold_sensitivity_curve(
-        selected_validation,
-        selected_predictions,
-        analysis_config,
-        selected_threshold=float(thresholds[selected_layer]),
-    )
-    calibration = calibration_curve_table(
-        selected_predictions["label"].to_numpy(),
-        selected_predictions["score"].to_numpy(),
-        bins=analysis_config.calibration_bins,
-    )
-    trajectories = trajectory_metrics(selected_predictions)
-    subgroups = subgroup_metrics(
-        selected_predictions,
-        metadata,
-        threshold=float(thresholds[selected_layer]),
-        analysis_config=analysis_config,
-        bootstrap_samples=analysis_config.exploratory_bootstrap_samples,
-        seed=seed,
-    )
-    comparisons = compare_probe_families(
-        family_metrics,
-        family_predictions,
-        primary_family=config.primary_family,
-        threshold_by_layer=thresholds,
-        analysis_config=analysis_config,
-        bootstrap_samples=analysis_config.exploratory_bootstrap_samples,
-        seed=seed,
-    )
+    if len(config.families) > 1 or config.diagnostic_targets:
+        family_metrics, family_predictions, diagnostic_metrics = _fit_exploratory_probes(
+            activations,
+            metadata,
+            config,
+            analysis_config,
+            primary_metrics=metrics,
+            primary_predictions=pd.concat(prediction_rows, ignore_index=True),
+            seed=seed,
+        )
+    else:
+        family_metrics = pd.DataFrame()
+        family_predictions = pd.DataFrame()
+        diagnostic_metrics = pd.DataFrame()
+
+    if analysis_config.exploratory_bootstrap_samples > 0:
+        validation_predictions = pd.concat(validation_prediction_rows, ignore_index=True)
+        selected_validation = validation_predictions[
+            validation_predictions["layer"] == selected_layer
+        ].copy()
+        threshold_sensitivity = threshold_sensitivity_curve(
+            selected_validation,
+            selected_predictions,
+            analysis_config,
+            selected_threshold=float(thresholds[selected_layer]),
+        )
+        calibration = calibration_curve_table(
+            selected_predictions["label"].to_numpy(),
+            selected_predictions["score"].to_numpy(),
+            bins=analysis_config.calibration_bins,
+        )
+        trajectories = trajectory_metrics(selected_predictions)
+        subgroups = subgroup_metrics(
+            selected_predictions,
+            metadata,
+            threshold=float(thresholds[selected_layer]),
+            analysis_config=analysis_config,
+            bootstrap_samples=analysis_config.exploratory_bootstrap_samples,
+            seed=seed,
+        )
+    else:
+        threshold_sensitivity = pd.DataFrame()
+        calibration = pd.DataFrame()
+        trajectories = pd.DataFrame()
+        subgroups = pd.DataFrame()
+
+    if len(config.families) > 1:
+        comparisons = compare_probe_families(
+            family_metrics,
+            family_predictions,
+            primary_family=config.primary_family,
+            threshold_by_layer=thresholds,
+            analysis_config=analysis_config,
+            bootstrap_samples=analysis_config.exploratory_bootstrap_samples,
+            seed=seed,
+        )
+    else:
+        comparisons = pd.DataFrame()
     bootstrap_summary = summarize_bootstrap(bootstrap, analysis_config.confidence_level)
     return ProbeResults(
         metrics=metrics,

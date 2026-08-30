@@ -50,9 +50,6 @@ been generated.
   model's `INCORRECT` versus `CORRECT` verdict score.
 - **Controls:** problem-grouped splits, validation-only selection, position, current-step TF-IDF,
   shuffled labels, and matched random orthogonal intervention directions.
-- **Exploratory analyses:** L1 and elastic-net probes, calibration, near-miss localization,
-  detection lead/lag, threshold sensitivity, error-aligned trajectories, subgroup robustness,
-  and paired causal-effect uncertainty.
 
 The primary outcome is not simply layer-wise AUROC. It is whether a probe trained on
 `invalid_so_far` crosses its threshold at the annotated error step. This tests *when* the model
@@ -86,10 +83,9 @@ Use the all-in-one notebook:
 - [Open the experiment in Colab](https://colab.research.google.com/github/sagnikc395/tracing-mathematical-error-detection-in-language-models/blob/main/notebooks/experiment.ipynb)
 
 Select **Runtime → Change runtime type → T4 GPU** and run the notebook from the top. It uses the
-full preregistered configuration, Google Drive persistence, and all experiment stages by default.
-Storage, artifact naming, stage selection, and nested configuration overrides are editable in the
-configuration cells. See [notebooks/README.md](notebooks/README.md) for the available controls,
-resume behavior, output locations, and optional publishing workflow.
+fixed paper configuration and Google Drive persistence, runs Experiments A--C, creates the essential
+paper figures, and publishes the checked result package to GitHub. See
+[notebooks/README.md](notebooks/README.md) for authentication, workflow, and output details.
 
 ### Command line
 
@@ -112,23 +108,6 @@ python -m causal_circuits --config configs/experiment.yaml run-all
 ```
 
 The global `--config` argument must appear before the subcommand.
-
-### Notebook configuration
-
-The notebook loads `configs/experiment.yaml` without changing its full-run settings when
-`CONFIG_OVERRIDES` is empty. To run a smaller diagnostic configuration, choose a distinct artifact
-name and provide only the values to change:
-
-```python
-DATA_FILENAME = "processbench-25-per-source.jsonl"
-ARTIFACT_NAME = "diagnostic-25-per-source"
-CONFIG_OVERRIDES = {
-    "data": {"max_examples_per_split": 25},
-    "probe": {"bootstrap_samples": 0},
-    "analysis": {"exploratory_bootstrap_samples": 0},
-    "intervention": {"examples_per_class": 8, "random_directions": 2},
-}
-```
 
 The harness fingerprints the data and model settings and refuses to mix incompatible activation
 shards. Do not reuse an output directory after changing the model, dataset sample, dtype, or
@@ -198,17 +177,8 @@ artifacts/qwen2.5-math-1.5b/
 │   ├── test_predictions.csv
 │   ├── controls.csv
 │   ├── domain_transfer.csv
-│   ├── pca_subspace.csv
 │   ├── test_group_bootstrap.csv
 │   ├── test_group_bootstrap_summary.csv
-│   ├── probe_family_metrics.csv
-│   ├── probe_family_predictions.csv
-│   ├── probe_family_comparisons.csv
-│   ├── diagnostic_target_metrics.csv
-│   ├── calibration.csv
-│   ├── threshold_sensitivity.csv
-│   ├── score_trajectories.csv
-│   ├── subgroup_metrics.csv
 │   └── directions.npz
 ├── interventions/
 │   ├── behavioral_verdict.json
@@ -216,25 +186,22 @@ artifacts/qwen2.5-math-1.5b/
 │   ├── effect_statistics.csv
 │   └── summary.csv
 └── figures/
-    ├── layerwise_probe.pdf
-    ├── pca_subspace.pdf
-    ├── probe_calibration.pdf
-    ├── error_aligned_trajectory.pdf
-    └── causal_dose_response.pdf
+    ├── method_and_trajectory.pdf
+    ├── predictive_results.pdf
+    └── transfer_and_causal.pdf
 ```
 
-Activation shards are resumable caches and are excluded from Git. The notebook publishing step
-can copy the final result tables, learned directions, intervention outputs, figures, extraction
-identity, and generated configuration into `artifacts/` after the run.
+Activation shards are resumable caches and are excluded from Git. The notebook publishes only the
+fixed configuration, essential tables and directions, intervention outputs, and the three figures.
 
 ## Repository guide
 
 | Path | Purpose | Current state |
 | --- | --- | --- |
-| `configs/experiment.yaml` | Frozen full-run configuration | Ready |
+| `configs/experiment.yaml` | Frozen paper-only configuration | Ready |
 | `src/causal_circuits/` | Data, model, probe, intervention, and plotting code | Implemented |
-| `tests/` | Unit tests for configuration, data, analysis, and circuits | 15 passing |
-| `notebooks/experiment.ipynb` | Configurable full Colab workflow | Ready to run |
+| `tests/` | Unit tests for configuration, data, analysis, circuits, and figures | 16 passing |
+| `notebooks/experiment.ipynb` | Fixed Experiments A--C Colab workflow | Ready to run |
 | `experiment.md` | Preregistered hypotheses, decisions, claim table, and schedule | Complete |
 | `paper/` | NeurIPS style, checklist, and manuscript source | Template only |
 | `artifacts/` | Generated results and figures | Not generated |

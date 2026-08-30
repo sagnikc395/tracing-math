@@ -146,20 +146,27 @@ def fit_and_save_probes(config: ExperimentConfig) -> ProbeResults:
     output = config.extraction.output_dir / "probes"
     output.mkdir(parents=True, exist_ok=True)
     results.metrics.to_csv(output / "layer_metrics.csv", index=False)
-    results.predictions.to_csv(output / "test_predictions.csv", index=False)
+    selected_predictions = results.predictions[
+        results.predictions["layer"] == results.selected_layer
+    ]
+    selected_predictions.to_csv(output / "test_predictions.csv", index=False)
     results.controls.to_csv(output / "controls.csv", index=False)
     results.transfer.to_csv(output / "domain_transfer.csv", index=False)
-    results.pca_curve.to_csv(output / "pca_subspace.csv", index=False)
     results.bootstrap.to_csv(output / "test_group_bootstrap.csv", index=False)
     results.bootstrap_summary.to_csv(output / "test_group_bootstrap_summary.csv", index=False)
-    results.family_metrics.to_csv(output / "probe_family_metrics.csv", index=False)
-    results.family_predictions.to_csv(output / "probe_family_predictions.csv", index=False)
-    results.diagnostic_metrics.to_csv(output / "diagnostic_target_metrics.csv", index=False)
-    results.calibration.to_csv(output / "calibration.csv", index=False)
-    results.threshold_sensitivity.to_csv(output / "threshold_sensitivity.csv", index=False)
-    results.trajectories.to_csv(output / "score_trajectories.csv", index=False)
-    results.subgroups.to_csv(output / "subgroup_metrics.csv", index=False)
-    results.comparisons.to_csv(output / "probe_family_comparisons.csv", index=False)
+    if config.probe.pca_dimensions:
+        results.pca_curve.to_csv(output / "pca_subspace.csv", index=False)
+    if len(config.probe.families) > 1:
+        results.family_metrics.to_csv(output / "probe_family_metrics.csv", index=False)
+        results.family_predictions.to_csv(output / "probe_family_predictions.csv", index=False)
+        results.comparisons.to_csv(output / "probe_family_comparisons.csv", index=False)
+    if config.probe.diagnostic_targets:
+        results.diagnostic_metrics.to_csv(output / "diagnostic_target_metrics.csv", index=False)
+    if config.analysis.exploratory_bootstrap_samples > 0:
+        results.calibration.to_csv(output / "calibration.csv", index=False)
+        results.threshold_sensitivity.to_csv(output / "threshold_sensitivity.csv", index=False)
+        results.trajectories.to_csv(output / "score_trajectories.csv", index=False)
+        results.subgroups.to_csv(output / "subgroup_metrics.csv", index=False)
     np.savez(
         output / "directions.npz",
         directions=results.directions,
@@ -236,65 +243,197 @@ def plot_artifacts(config: ExperimentConfig) -> list[Path]:
     outputs: list[Path] = []
 
     metrics = pd.read_csv(probe_dir / "layer_metrics.csv")
-    test = metrics[metrics["split"] == "test"]
-    figure, axis = plt.subplots(figsize=(6, 3.5))
-    axis.plot(test["layer"], test["auroc"], marker="o", label="step AUROC")
-    axis.plot(test["layer"], test["process_f1"], marker="s", label="first-error F1")
-    axis.axhline(0.5, color="0.6", linestyle="--", linewidth=1)
-    axis.set(xlabel="Hidden-state index", ylabel="Held-out score", ylim=(0, 1))
-    axis.legend(frameon=False)
-    outputs.append(_save_figure(figure, figure_dir / "layerwise_probe.pdf"))
+    predictions = pd.read_csv(probe_dir / "test_predictions.csv")
+    controls = pd.read_csv(probe_dir / "controls.csv")
+    transfer = pd.read_csv(probe_dir / "domain_transfer.csv")
+    bootstrap = pd.read_csv(probe_dir / "test_group_bootstrap_summary.csv")
+    directions = np.load(probe_dir / "directions.npz")
+    selected_layer = int(directions["selected_layer"])
+    selected_threshold = float(directions["thresholds"][selected_layer])
 
-    pca_path = probe_dir / "pca_subspace.csv"
-    if pca_path.exists() and not pd.read_csv(pca_path).empty:
-        pca = pd.read_csv(pca_path)
-        figure, axis = plt.subplots(figsize=(5, 3.5))
-        axis.plot(pca["dimensions"], pca["auroc"], marker="o")
-        axis.set_xscale("log", base=2)
-        axis.set(xlabel="Top-variance PCA dimensions", ylabel="Held-out AUROC", ylim=(0, 1))
-        outputs.append(_save_figure(figure, figure_dir / "pca_subspace.pdf"))
-
-    calibration_path = probe_dir / "calibration.csv"
-    if calibration_path.exists() and not pd.read_csv(calibration_path).empty:
-        calibration = pd.read_csv(calibration_path).dropna(subset=["mean_score", "positive_rate"])
-        figure, axis = plt.subplots(figsize=(4, 4))
-        axis.plot([0, 1], [0, 1], color="0.6", linestyle="--", linewidth=1)
-        axis.plot(calibration["mean_score"], calibration["positive_rate"], marker="o")
-        axis.set(
-            xlabel="Mean predicted score",
-            ylabel="Observed invalid-step rate",
-            xlim=(0, 1),
-            ylim=(0, 1),
+    # Figure 1: method schematic and one deterministic held-out trajectory.
+    figure, axes = plt.subplots(1, 2, figsize=(10, 3.6), gridspec_kw={"width_ratios": [1.2, 1]})
+    method_axis, trajectory_axis = axes
+    method_axis.axis("off")
+    stages = [
+        (0.02, 0.58, "Reasoning steps\nwith end markers"),
+        (0.35, 0.58, "Boundary residual\nstates at every layer"),
+        (0.68, 0.58, "L2 invalidity\nprobe"),
+        (0.35, 0.12, "Held-out\nlocalization"),
+        (0.68, 0.12, "Causal direction\nintervention"),
+    ]
+    for x, y, label in stages:
+        method_axis.text(
+            x,
+            y,
+            label,
+            transform=method_axis.transAxes,
+            ha="left",
+            va="center",
+            fontsize=9,
+            bbox={"boxstyle": "round,pad=0.4", "facecolor": "white", "edgecolor": "0.25"},
         )
-        outputs.append(_save_figure(figure, figure_dir / "probe_calibration.pdf"))
+    for start, end in (
+        ((0.26, 0.58), (0.34, 0.58)),
+        ((0.59, 0.58), (0.67, 0.58)),
+        ((0.51, 0.51), (0.45, 0.25)),
+        ((0.76, 0.51), (0.76, 0.25)),
+    ):
+        method_axis.annotate(
+            "",
+            xy=end,
+            xytext=start,
+            xycoords="axes fraction",
+            arrowprops={"arrowstyle": "->", "color": "0.3", "linewidth": 1.2},
+        )
+    method_axis.set_title("Mechanistic experiment", fontsize=10)
 
-    trajectories_path = probe_dir / "score_trajectories.csv"
-    if trajectories_path.exists() and not pd.read_csv(trajectories_path).empty:
-        trajectories = pd.read_csv(trajectories_path)
-        relative = trajectories[trajectories["metric"] == "mean_score_at_relative_step"]
-        figure, axis = plt.subplots(figsize=(5, 3.5))
-        axis.plot(relative["relative_step"], relative["value"], marker="o")
-        axis.axvline(0, color="0.6", linestyle="--", linewidth=1)
-        axis.set(xlabel="Step relative to first error", ylabel="Mean probe score", ylim=(0, 1))
-        outputs.append(_save_figure(figure, figure_dir / "error_aligned_trajectory.pdf"))
+    selected_predictions = predictions[predictions["layer"] == selected_layer].copy()
+    erroneous = selected_predictions[selected_predictions["first_error"] >= 0]
+    candidate_ids = (
+        erroneous[erroneous["first_error"] > 0]["trace_id"].drop_duplicates().sort_values()
+    )
+    if candidate_ids.empty:
+        candidate_ids = erroneous["trace_id"].drop_duplicates().sort_values()
+    if candidate_ids.empty:
+        raise ValueError("No held-out erroneous trace is available for the trajectory figure")
+    example = erroneous[erroneous["trace_id"] == candidate_ids.iloc[0]].sort_values("step_index")
+    first_error = int(example["first_error"].iloc[0])
+    trajectory_axis.plot(example["step_index"], example["score"], marker="o", color="C0")
+    trajectory_axis.axhline(selected_threshold, color="C1", linestyle="--", label="threshold")
+    trajectory_axis.axvline(first_error, color="C3", linestyle=":", label="human first error")
+    trajectory_axis.set(
+        xlabel="Reasoning step",
+        ylabel="Invalid-so-far score",
+        ylim=(0, 1),
+        title="Held-out example trajectory",
+    )
+    trajectory_axis.set_xticks(example["step_index"].to_numpy())
+    trajectory_axis.legend(frameon=False, fontsize=8)
+    outputs.append(_save_figure(figure, figure_dir / "method_and_trajectory.pdf"))
 
+    # Figure 2: layer curve, selected-layer bootstrap intervals, and all required controls.
+    test = metrics[metrics["split"] == "test"].sort_values("layer")
+    figure, axes = plt.subplots(1, 2, figsize=(11, 4.2), gridspec_kw={"width_ratios": [1.15, 1]})
+    curve_axis, table_axis = axes
+    curve_axis.plot(test["layer"], test["auroc"], marker="o", label="step AUROC")
+    curve_axis.plot(test["layer"], test["process_f1"], marker="s", label="first-error F1")
+    curve_axis.axhline(0.5, color="0.6", linestyle="--", linewidth=1)
+    curve_axis.axvline(selected_layer, color="0.25", linestyle=":", linewidth=1)
+    for offset, metric, color in ((-0.18, "auroc", "C0"), (0.18, "process_f1", "C1")):
+        interval = bootstrap[bootstrap["metric"] == metric]
+        if not interval.empty:
+            row = interval.iloc[0]
+            curve_axis.errorbar(
+                selected_layer + offset,
+                row["estimate"],
+                yerr=[[row["estimate"] - row["ci_low"]], [row["ci_high"] - row["estimate"]]],
+                fmt="o",
+                capsize=3,
+                color=color,
+            )
+    curve_axis.set(
+        xlabel="Hidden-state index",
+        ylabel="Held-out score",
+        ylim=(0, 1),
+        title="Layer-wise decoding and localization",
+    )
+    curve_axis.legend(frameon=False, fontsize=8)
+
+    selected_row = test[test["layer"] == selected_layer].iloc[0]
+    embedding_row = test[test["layer"] == 0].iloc[0]
+    within_error_row = metrics[
+        (metrics["split"] == "test_error_traces") & (metrics["layer"] == selected_layer)
+    ].iloc[0]
+    table_rows = [
+        ["Selected hidden state", selected_row["auroc"], selected_row["process_f1"]],
+        ["Embedding state", embedding_row["auroc"], embedding_row["process_f1"]],
+        ["Within-error traces", within_error_row["auroc"], within_error_row["process_f1"]],
+    ]
+    table_rows.extend(
+        [row["control"], row["auroc"], row["process_f1"]] for _, row in controls.iterrows()
+    )
+    table_axis.axis("off")
+    table_values = [
+        [name, f"{auroc:.3f}", f"{process_f1:.3f}"]
+        for name, auroc, process_f1 in table_rows
+    ]
+    table = table_axis.table(
+        cellText=table_values,
+        colLabels=["Held-out comparison", "AUROC", "First-error F1"],
+        colWidths=[0.58, 0.2, 0.25],
+        cellLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.35)
+    table_axis.set_title("Required shortcut controls", fontsize=10, pad=12)
+    outputs.append(_save_figure(figure, figure_dir / "predictive_results.pdf"))
+
+    # Figure 3: domain transfer and causal dose response with random-direction controls.
     intervention_path = config.extraction.output_dir / "interventions" / "summary.csv"
-    if intervention_path.exists():
-        intervention = pd.read_csv(intervention_path)
-        learned = intervention[intervention["direction_type"] == "learned"]
-        figure, axis = plt.subplots(figsize=(5, 3.5))
-        axis.errorbar(
-            learned["alpha"],
-            learned["mean_delta"],
-            yerr=learned["standard_error"],
-            marker="o",
+    if not intervention_path.exists():
+        raise FileNotFoundError("Run interventions before generating the paper figures")
+    intervention = pd.read_csv(intervention_path)
+    learned = intervention[intervention["direction_type"] == "learned"].sort_values("alpha")
+    random = intervention[intervention["direction_type"] == "random"]
+    figure, axes = plt.subplots(
+        1, 3, figsize=(13.5, 4.1), gridspec_kw={"width_ratios": [1, 1, 1.25]}
+    )
+    for axis, metric, title in zip(
+        axes[:2],
+        ("auroc", "process_f1"),
+        ("Cross-domain AUROC", "Cross-domain first-error F1"),
+        strict=True,
+    ):
+        matrix = transfer.pivot(index="train_source", columns="test_source", values=metric)
+        image = axis.imshow(matrix, vmin=0, vmax=1, cmap="viridis")
+        axis.set_xticks(range(len(matrix.columns)), matrix.columns, rotation=35, ha="right")
+        axis.set_yticks(range(len(matrix.index)), matrix.index)
+        axis.set(xlabel="Test source", ylabel="Train source", title=title)
+        for row_index in range(len(matrix.index)):
+            for column_index in range(len(matrix.columns)):
+                value = float(matrix.iloc[row_index, column_index])
+                axis.text(
+                    column_index,
+                    row_index,
+                    f"{value:.2f}",
+                    ha="center",
+                    va="center",
+                    color="white" if value < 0.65 else "black",
+                    fontsize=7,
+                )
+        figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+
+    causal_axis = axes[2]
+
+    if not random.empty:
+        causal_axis.scatter(
+            random["alpha"],
+            random["mean_delta"],
+            s=14,
+            color="0.65",
+            alpha=0.6,
+            label="random orthogonal directions",
         )
-        axis.axhline(0, color="0.6", linewidth=1)
-        axis.set(
-            xlabel=r"Intervention strength $\alpha$ (projection SD)",
-            ylabel="Change in incorrect-vs-correct verdict",
-        )
-        outputs.append(_save_figure(figure, figure_dir / "causal_dose_response.pdf"))
+    causal_axis.errorbar(
+        learned["alpha"],
+        learned["mean_delta"],
+        yerr=learned["standard_error"],
+        marker="o",
+        capsize=3,
+        color="C3",
+        label="learned direction",
+    )
+    causal_axis.axhline(0, color="0.4", linewidth=1)
+    causal_axis.set(
+        xlabel=r"Intervention strength $\alpha$ (projection SD)",
+        ylabel="Change in verdict score",
+        title="Held-out causal intervention",
+    )
+    causal_axis.legend(frameon=False, fontsize=8)
+    outputs.append(_save_figure(figure, figure_dir / "transfer_and_causal.pdf"))
     return outputs
 
 
