@@ -15,6 +15,7 @@ data:
 extraction:
   output_dir: artifacts/qwen2.5-math-1.5b
   save_every: 100
+  batch_size: 1
 
 probe:
   target: invalid_so_far
@@ -47,3 +48,4 @@ intervention:
   random_directions: 20
   correct_answer: " CORRECT"
   incorrect_answer: " INCORRECT"
+  batch_size: 1

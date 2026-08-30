@@ -16,6 +16,8 @@ def test_default_config_is_valid() -> None:
     assert config.probe.pca_dimensions == ()
     assert config.analysis.exploratory_bootstrap_samples == 0
     assert config.analysis.localization_tolerances == (0, 1, 2)
+    assert config.extraction.batch_size == 1
+    assert config.intervention.batch_size == 1
 
 
 def test_legacy_config_uses_confirmatory_defaults(tmp_path: Path) -> None:

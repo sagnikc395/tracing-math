@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,8 @@ def run_interventions(
     config: InterventionConfig,
     target: str,
     seed: int,
+    existing_results: pd.DataFrame | None = None,
+    checkpoint_callback: Callable[[pd.DataFrame], None] | None = None,
 ) -> pd.DataFrame:
     """Run a held-out dose response plus cheaper matched random-direction controls."""
     test = metadata[metadata["partition"] == "test"].copy()
@@ -47,29 +49,85 @@ def run_interventions(
     if missing:
         raise ValueError(f"Missing {len(missing)} intervention traces from the local dataset")
 
-    rows: list[dict[str, object]] = []
-    for row in selected.itertuples(index=False):
-        trace = trace_lookup[row.trace_id]
-        baseline = model.verdict_score(
-            trace,
-            int(row.step_index),
+    rows: list[dict[str, object]] = (
+        [] if existing_results is None else existing_results.to_dict(orient="records")
+    )
+
+    def checkpoint() -> None:
+        if checkpoint_callback is not None:
+            checkpoint_callback(pd.DataFrame(rows))
+
+    def completed_keys(direction_type: str, direction_index: int, alpha: float) -> set[tuple]:
+        return {
+            (str(item["trace_id"]), int(item["step_index"]))
+            for item in rows
+            if item["direction_type"] == direction_type
+            and int(item["direction_index"]) == direction_index
+            and float(item["alpha"]) == float(alpha)
+        }
+
+    selected_rows = list(selected.itertuples(index=False))
+    baselines = {
+        (str(item["trace_id"]), int(item["step_index"])): float(
+            item["baseline_verdict_score"]
+        )
+        for item in rows
+    }
+    missing_baseline_rows = [
+        row
+        for row in selected_rows
+        if (row.trace_id, int(row.step_index)) not in baselines
+    ]
+    missing_baseline_requests = [
+        (trace_lookup[row.trace_id], int(row.step_index)) for row in missing_baseline_rows
+    ]
+    missing_baseline_scores = model.verdict_scores(
+        missing_baseline_requests,
+        correct_answer=config.correct_answer,
+        incorrect_answer=config.incorrect_answer,
+        batch_size=config.batch_size,
+    )
+    baselines.update(
+        {
+            (row.trace_id, int(row.step_index)): score
+            for row, score in zip(
+                missing_baseline_rows, missing_baseline_scores, strict=True
+            )
+        }
+    )
+    existing_zero = completed_keys("learned", -1, 0.0)
+    for row in selected_rows:
+        key = (row.trace_id, int(row.step_index))
+        if key in existing_zero:
+            continue
+        baseline = baselines[(row.trace_id, int(row.step_index))]
+        rows.append(_intervention_row(row, "learned", -1, 0.0, baseline, baseline))
+    checkpoint()
+    for alpha in config.alphas:
+        if alpha == 0:
+            continue
+        existing_alpha = completed_keys("learned", -1, alpha)
+        alpha_rows = [
+            row
+            for row in selected_rows
+            if (row.trace_id, int(row.step_index)) not in existing_alpha
+        ]
+        alpha_requests = [
+            (trace_lookup[row.trace_id], int(row.step_index)) for row in alpha_rows
+        ]
+        alpha_scores = model.verdict_scores(
+            alpha_requests,
             correct_answer=config.correct_answer,
             incorrect_answer=config.incorrect_answer,
+            layer=layer,
+            direction=direction,
+            magnitude=float(alpha) * projection_std,
+            batch_size=config.batch_size,
         )
-        rows.append(_intervention_row(row, "learned", -1, 0.0, baseline, baseline))
-        for alpha in config.alphas:
-            if alpha == 0:
-                continue
-            score = model.verdict_score(
-                trace,
-                int(row.step_index),
-                correct_answer=config.correct_answer,
-                incorrect_answer=config.incorrect_answer,
-                layer=layer,
-                direction=direction,
-                magnitude=float(alpha) * projection_std,
-            )
+        for row, score in zip(alpha_rows, alpha_scores, strict=True):
+            baseline = baselines[(row.trace_id, int(row.step_index))]
             rows.append(_intervention_row(row, "learned", -1, alpha, score, baseline))
+        checkpoint()
 
     random_directions = random_orthogonal_directions(
         direction, config.random_directions, seed=seed + 1
@@ -79,34 +137,34 @@ def run_interventions(
     control_examples = _balanced_sample(selected, target, control_size, seed + 1)
     extreme_alphas = sorted({min(config.alphas), max(config.alphas)} - {0.0})
     control_rows = list(control_examples.itertuples(index=False))
-    control_baselines = {
-        (row.trace_id, int(row.step_index)): model.verdict_score(
-            trace_lookup[row.trace_id],
-            int(row.step_index),
-            correct_answer=config.correct_answer,
-            incorrect_answer=config.incorrect_answer,
-        )
-        for row in control_rows
-    }
     for direction_index, control_direction in enumerate(random_directions):
-        for row in control_rows:
-            trace = trace_lookup[row.trace_id]
-            baseline = control_baselines[(row.trace_id, int(row.step_index))]
-            for alpha in extreme_alphas:
-                score = model.verdict_score(
-                    trace,
-                    int(row.step_index),
-                    correct_answer=config.correct_answer,
-                    incorrect_answer=config.incorrect_answer,
-                    layer=layer,
-                    direction=control_direction,
-                    magnitude=float(alpha) * projection_std,
-                )
+        for alpha in extreme_alphas:
+            existing_control = completed_keys("random_orthogonal", direction_index, alpha)
+            pending_rows = [
+                row
+                for row in control_rows
+                if (row.trace_id, int(row.step_index)) not in existing_control
+            ]
+            pending_requests = [
+                (trace_lookup[row.trace_id], int(row.step_index)) for row in pending_rows
+            ]
+            control_scores = model.verdict_scores(
+                pending_requests,
+                correct_answer=config.correct_answer,
+                incorrect_answer=config.incorrect_answer,
+                layer=layer,
+                direction=control_direction,
+                magnitude=float(alpha) * projection_std,
+                batch_size=config.batch_size,
+            )
+            for row, score in zip(pending_rows, control_scores, strict=True):
+                baseline = baselines[(row.trace_id, int(row.step_index))]
                 rows.append(
                     _intervention_row(
                         row, "random_orthogonal", direction_index, alpha, score, baseline
                     )
                 )
+            checkpoint()
     return pd.DataFrame(rows)
 
 

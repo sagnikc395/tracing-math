@@ -29,6 +29,7 @@ class DataConfig:
 class ExtractionConfig:
     output_dir: Path
     save_every: int = 100
+    batch_size: int = 1
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ class InterventionConfig:
     random_directions: int
     correct_answer: str
     incorrect_answer: str
+    batch_size: int = 1
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,8 @@ class ExperimentConfig:
             raise ValueError("data.max_examples_per_split must be positive or null")
         if self.extraction.save_every < 1:
             raise ValueError("extraction.save_every must be positive")
+        if self.extraction.batch_size < 1:
+            raise ValueError("extraction.batch_size must be positive")
         if self.probe.target not in {"invalid_so_far", "error_onset"}:
             raise ValueError("probe.target must be invalid_so_far or error_onset")
         fractions = (
@@ -151,6 +155,8 @@ class ExperimentConfig:
             raise ValueError("intervention.examples_per_class must be positive")
         if self.intervention.random_directions < 0:
             raise ValueError("intervention.random_directions cannot be negative")
+        if self.intervention.batch_size < 1:
+            raise ValueError("intervention.batch_size must be positive")
         if not 0 <= self.analysis.threshold_min < self.analysis.threshold_max <= 1:
             raise ValueError("analysis threshold bounds must satisfy 0 <= min < max <= 1")
         if self.analysis.threshold_points < 2:
@@ -198,6 +204,7 @@ def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
         extraction=ExtractionConfig(
             output_dir=Path(extraction["output_dir"]),
             save_every=int(extraction.get("save_every", 100)),
+            batch_size=int(extraction.get("batch_size", 1)),
         ),
         probe=ProbeConfig(
             target=str(probe["target"]),
@@ -225,6 +232,7 @@ def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
             random_directions=int(intervention["random_directions"]),
             correct_answer=str(intervention.get("correct_answer", " CORRECT")),
             incorrect_answer=str(intervention.get("incorrect_answer", " INCORRECT")),
+            batch_size=int(intervention.get("batch_size", 1)),
         ),
         analysis=AnalysisConfig(
             threshold_min=float(analysis.get("threshold_min", 0.05)),

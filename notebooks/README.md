@@ -11,13 +11,15 @@ paper. It runs, in order:
 5. the three essential paper figures; and
 6. publication of the final result package to GitHub.
 
-Use **Runtime → Change runtime type → T4 GPU**, then run every cell from top to bottom. The notebook
+Use **Runtime → Change runtime type → A100 GPU**, then run every cell from top to bottom. The notebook
 mounts Google Drive and writes the fixed run to:
 
 ```text
 MyDrive/math-error-tracing/
 ├── data/processbench.jsonl
-└── artifacts/qwen2.5-math-1.5b/
+├── run_status.json
+├── logs/
+└── artifacts/qwen2.5-math-1.5b-a100-bf16/
 ```
 
 Before starting, create a fine-grained GitHub token with **Contents: read and write** permission and
@@ -25,13 +27,15 @@ store it in Colab Secrets as `GITHUB_TOKEN`. Authentication uses a temporary `GI
 the token is not embedded in the clone URL, Git remote, notebook source, or output.
 
 All scientific settings come from `configs/experiment.yaml`, which contains only the confirmatory L2
-probe and Experiments A--C settings. The notebook changes only the data and artifact paths so results
-survive Colab disconnects. It intentionally has no sampled-run overrides, stage switches, smoke
-tests, exploratory probe families, or PCA analysis.
+probe and Experiments A--C settings. The notebook changes only persistence paths and runtime settings
+(BF16 and batch sizes) for the A100. It intentionally has no sampled-run overrides, stage switches,
+smoke tests, exploratory probe families, or PCA analysis.
 
-Activation extraction is resumable. Re-running the notebook reuses complete shards and regenerates
-the downstream paper artifacts from them. The publishing cell commits only the fixed generated
-configuration, essential tables, learned directions, intervention outputs, and these figures:
+Activation extraction and causal interventions are resumable. Re-running the notebook reuses
+complete activation shards and intervention groups. `run_status.json`, per-stage logs,
+`extraction_progress.json`, and `interventions/progress.json` record what is running and what has
+finished. The publishing cell commits only the fixed generated configuration, essential tables,
+learned directions, intervention outputs, and these figures:
 
 - `method_and_trajectory.pdf`;
 - `predictive_results.pdf`; and

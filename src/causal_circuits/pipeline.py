@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -71,23 +72,38 @@ def extract_activation_shards(config: ExperimentConfig) -> dict[str, int]:
             cached = json.loads(manifest_path.read_text())
             totals["cached"] += int(cached["extracted"])
             totals["skipped_long"] += int(cached["skipped_long"])
+            _write_extraction_progress(output_dir, totals, start, end, len(traces))
             continue
 
         arrays: list[np.ndarray] = []
         rows: list[dict[str, object]] = []
         skipped: list[dict[str, object]] = []
-        for trace in tqdm(traces[start:end], leave=False, desc=stem):
+        shard_traces = traces[start:end]
+        batch_size = config.extraction.batch_size
+        for batch_start in tqdm(
+            range(0, len(shard_traces), batch_size), leave=False, desc=stem
+        ):
+            batch = shard_traces[batch_start : batch_start + batch_size]
             try:
-                result = model.extract_trace(trace)
-            except TraceTooLongError as error:
-                skipped.append({"trace_id": trace.trace_id, "reason": str(error)})
-                continue
-            arrays.append(result.values)
-            rows.extend(
-                iter_step_metadata(
-                    trace, partitions[trace.trace_id], token_count=result.token_count
+                batch_results = model.extract_traces(batch)
+            except TraceTooLongError:
+                # Isolate over-length traces without throwing away the rest of the batch.
+                batch_results = []
+                retained = []
+                for trace in batch:
+                    try:
+                        batch_results.append(model.extract_trace(trace))
+                        retained.append(trace)
+                    except TraceTooLongError as error:
+                        skipped.append({"trace_id": trace.trace_id, "reason": str(error)})
+                batch = retained
+            for trace, result in zip(batch, batch_results, strict=True):
+                arrays.append(result.values)
+                rows.extend(
+                    iter_step_metadata(
+                        trace, partitions[trace.trace_id], token_count=result.token_count
+                    )
                 )
-            )
         if not arrays:
             raise RuntimeError(f"No extractable traces in {stem}; raise model.max_length")
         activations = np.concatenate(arrays, axis=0)
@@ -106,6 +122,7 @@ def extract_activation_shards(config: ExperimentConfig) -> dict[str, int]:
         _atomic_write_text(manifest_path, json.dumps(shard_manifest, indent=2))
         totals["extracted"] += len(arrays)
         totals["skipped_long"] += len(skipped)
+        _write_extraction_progress(output_dir, totals, start, end, len(traces))
     return totals
 
 
@@ -195,6 +212,28 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
         dtype=config.model.dtype,
         max_length=config.model.max_length,
     )
+    output = config.extraction.output_dir / "interventions"
+    output.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = output / "individual.checkpoint.csv"
+    existing = pd.read_csv(checkpoint_path) if checkpoint_path.exists() else None
+
+    def checkpoint(frame: pd.DataFrame) -> None:
+        _atomic_save_csv(checkpoint_path, frame)
+        progress = {
+            "status": "running",
+            "rows_completed": len(frame),
+            "learned_alphas_completed": sorted(
+                frame.loc[frame["direction_type"] == "learned", "alpha"].unique().tolist()
+            ),
+            "random_direction_alpha_groups_completed": int(
+                frame.loc[frame["direction_type"] == "random_orthogonal"]
+                .groupby(["direction_index", "alpha"])
+                .ngroups
+            ),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _atomic_write_text(output / "progress.json", json.dumps(progress, indent=2))
+
     results = run_interventions(
         model,
         traces,
@@ -205,9 +244,9 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
         config=config.intervention,
         target=config.probe.target,
         seed=config.seed,
+        existing_results=existing,
+        checkpoint_callback=checkpoint,
     )
-    output = config.extraction.output_dir / "interventions"
-    output.mkdir(parents=True, exist_ok=True)
     results.to_csv(output / "individual.csv", index=False)
     summarize_interventions(results).to_csv(output / "summary.csv", index=False)
     causal_effect_statistics(
@@ -231,7 +270,34 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
         ).mean()
     )
     _atomic_write_text(output / "behavioral_verdict.json", json.dumps(baseline_metrics, indent=2))
+    _atomic_write_text(
+        output / "progress.json",
+        json.dumps(
+            {
+                "status": "complete",
+                "rows_completed": len(results),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+        ),
+    )
     return results
+
+
+def _write_extraction_progress(
+    output_dir: Path, totals: dict[str, int], start: int, end: int, trace_count: int
+) -> None:
+    completed = totals["cached"] + totals["extracted"] + totals["skipped_long"]
+    progress = {
+        "status": "complete" if end >= trace_count else "running",
+        "last_shard": {"start": start, "end_exclusive": end},
+        "traces_total": trace_count,
+        "traces_completed": completed,
+        "fraction_complete": completed / trace_count if trace_count else 1.0,
+        **totals,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _atomic_write_text(output_dir / "extraction_progress.json", json.dumps(progress, indent=2))
 
 
 def plot_artifacts(config: ExperimentConfig) -> list[Path]:
@@ -377,7 +443,9 @@ def plot_artifacts(config: ExperimentConfig) -> list[Path]:
         raise FileNotFoundError("Run interventions before generating the paper figures")
     intervention = pd.read_csv(intervention_path)
     learned = intervention[intervention["direction_type"] == "learned"].sort_values("alpha")
-    random = intervention[intervention["direction_type"] == "random"]
+    random = intervention[
+        intervention["direction_type"].isin(["random_orthogonal", "random"])
+    ]
     figure, axes = plt.subplots(
         1, 3, figsize=(13.5, 4.1), gridspec_kw={"width_ratios": [1, 1, 1.25]}
     )

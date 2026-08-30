@@ -21,7 +21,7 @@ class TraceActivations:
 
 
 class HuggingFaceMathModel:
-    """Small causal-LM wrapper designed for a single Colab T4."""
+    """Causal-LM wrapper with exact-boundary batching for a single GPU."""
 
     def __init__(
         self,
@@ -52,6 +52,8 @@ class HuggingFaceMathModel:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
         if not self.tokenizer.is_fast:
             raise RuntimeError("A fast tokenizer is required to locate exact step boundaries")
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         torch_dtype = getattr(torch, dtype)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
@@ -120,23 +122,64 @@ class HuggingFaceMathModel:
 
     def extract_trace(self, trace: ProcessTrace) -> TraceActivations:
         """Extract every step boundary with a single causal forward pass."""
-        rendered, markers = self._render(trace, trace.steps)
-        model_inputs, boundaries = self._encode_with_boundaries(rendered, markers)
+        return self.extract_traces([trace])[0]
+
+    def extract_traces(self, traces: Sequence[ProcessTrace]) -> list[TraceActivations]:
+        """Extract a batch of traces while retaining each trace's exact boundaries."""
+        if not traces:
+            return []
+        rendered_batch: list[str] = []
+        marker_batch: list[list[str]] = []
+        for trace in traces:
+            rendered, markers = self._render(trace, trace.steps)
+            rendered_batch.append(rendered)
+            marker_batch.append(markers)
+
+        encoded = self.tokenizer(
+            rendered_batch,
+            add_special_tokens=False,
+            padding=True,
+            return_offsets_mapping=True,
+            return_tensors="pt",
+        )
+        offsets_batch = encoded.pop("offset_mapping").tolist()
+        token_counts = encoded["attention_mask"].sum(dim=1).tolist()
+        for token_count in token_counts:
+            if token_count > self.max_length:
+                raise TraceTooLongError(
+                    f"Complete prompt has {token_count} tokens (limit {self.max_length})"
+                )
+        boundaries_batch = [
+            [self._marker_token_index(rendered, marker, offsets) for marker in markers]
+            for rendered, markers, offsets in zip(
+                rendered_batch, marker_batch, offsets_batch, strict=True
+            )
+        ]
+        model_inputs = {key: value.to(self.device) for key, value in encoded.items()}
         with self._torch.inference_mode():
-            output = self.model(
+            # Call the decoder directly: activation extraction does not need the very large
+            # [batch, sequence, vocabulary] LM-head logits tensor.
+            output = self.model.model(
                 **model_inputs,
                 output_hidden_states=True,
                 use_cache=False,
                 return_dict=True,
             )
-        values = self._torch.stack(
-            [hidden[0, boundaries, :].detach().float().cpu() for hidden in output.hidden_states],
-            dim=1,
-        ).numpy()
-        return TraceActivations(
-            values=values.astype(np.float16),
-            token_count=len(model_inputs["input_ids"][0]),
-        )
+        results = []
+        for batch_index, (boundaries, token_count) in enumerate(
+            zip(boundaries_batch, token_counts, strict=True)
+        ):
+            values = self._torch.stack(
+                [
+                    hidden[batch_index, boundaries, :].detach().float().cpu()
+                    for hidden in output.hidden_states
+                ],
+                dim=1,
+            ).numpy()
+            results.append(
+                TraceActivations(values=values.astype(np.float16), token_count=int(token_count))
+            )
+        return results
 
     def verdict_score(
         self,
@@ -150,43 +193,100 @@ class HuggingFaceMathModel:
         magnitude: float = 0.0,
     ) -> float:
         """Return mean log P(INCORRECT) - mean log P(CORRECT), optionally intervened."""
-        if not 0 <= step_index < len(trace.steps):
-            raise IndexError(f"Step {step_index} is outside trace {trace.trace_id}")
-        rendered, markers = self._render(trace, trace.steps[: step_index + 1])
-        _, boundaries = self._encode_with_boundaries(rendered, markers)
-        boundary = boundaries[-1]
-        kwargs = {"layer": layer, "direction": direction, "magnitude": magnitude}
-        incorrect = self._answer_log_probability(
-            rendered, incorrect_answer, boundary=boundary, **kwargs
-        )
-        correct = self._answer_log_probability(
-            rendered, correct_answer, boundary=boundary, **kwargs
-        )
-        return incorrect - correct
+        return self.verdict_scores(
+            [(trace, step_index)],
+            correct_answer=correct_answer,
+            incorrect_answer=incorrect_answer,
+            layer=layer,
+            direction=direction,
+            magnitude=magnitude,
+            batch_size=1,
+        )[0]
 
-    def _answer_log_probability(
+    def verdict_scores(
         self,
-        rendered: str,
-        answer: str,
+        requests: Sequence[tuple[ProcessTrace, int]],
         *,
-        boundary: int,
+        correct_answer: str,
+        incorrect_answer: str,
+        layer: int | None = None,
+        direction: np.ndarray | None = None,
+        magnitude: float = 0.0,
+        batch_size: int = 1,
+    ) -> list[float]:
+        """Score multiple trace boundaries, batching both candidate answers together."""
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        scores: list[float] = []
+        for start in range(0, len(requests), batch_size):
+            chunk = requests[start : start + batch_size]
+            rendered_batch: list[str] = []
+            boundary_batch: list[int] = []
+            for trace, step_index in chunk:
+                if not 0 <= step_index < len(trace.steps):
+                    raise IndexError(f"Step {step_index} is outside trace {trace.trace_id}")
+                rendered, markers = self._render(trace, trace.steps[: step_index + 1])
+                boundary_encoding = self.tokenizer(
+                    rendered,
+                    add_special_tokens=False,
+                    return_offsets_mapping=True,
+                )
+                if len(boundary_encoding["input_ids"]) > self.max_length:
+                    raise TraceTooLongError(
+                        "Verdict prompt exceeds the configured context limit"
+                    )
+                offsets = boundary_encoding["offset_mapping"]
+                boundaries = [
+                    self._marker_token_index(rendered, marker, offsets) for marker in markers
+                ]
+                rendered_batch.append(rendered)
+                boundary_batch.append(boundaries[-1])
+            scores.extend(
+                self._answer_log_probability_differences(
+                    rendered_batch,
+                    boundary_batch,
+                    correct_answer=correct_answer,
+                    incorrect_answer=incorrect_answer,
+                    layer=layer,
+                    direction=direction,
+                    magnitude=magnitude,
+                )
+            )
+        return scores
+
+    def _answer_log_probability_differences(
+        self,
+        rendered_batch: Sequence[str],
+        boundaries: Sequence[int],
+        *,
+        correct_answer: str,
+        incorrect_answer: str,
         layer: int | None,
         direction: np.ndarray | None,
         magnitude: float,
-    ) -> float:
-        full_text = rendered + answer
+    ) -> list[float]:
+        texts = [
+            rendered + answer
+            for rendered in rendered_batch
+            for answer in (incorrect_answer, correct_answer)
+        ]
+        prompt_lengths = [len(rendered) for rendered in rendered_batch for _ in range(2)]
         encoded = self.tokenizer(
-            full_text,
+            texts,
             add_special_tokens=False,
+            padding=True,
             return_offsets_mapping=True,
             return_tensors="pt",
         )
-        if encoded["input_ids"].shape[1] > self.max_length:
+        if int(encoded["attention_mask"].sum(dim=1).max()) > self.max_length:
             raise TraceTooLongError("Verdict prompt exceeds the configured context limit")
-        offsets = encoded.pop("offset_mapping")[0].tolist()
-        answer_positions = [index for index, (_, end) in enumerate(offsets) if end > len(rendered)]
-        if not answer_positions or answer_positions[0] == 0:
-            raise RuntimeError(f"Could not identify tokens for answer {answer!r}")
+        offsets_batch = encoded.pop("offset_mapping").tolist()
+        answer_positions = [
+            [index for index, (_, end) in enumerate(offsets) if end > prompt_length]
+            for offsets, prompt_length in zip(offsets_batch, prompt_lengths, strict=True)
+        ]
+        if any(not positions or positions[0] == 0 for positions in answer_positions):
+            raise RuntimeError("Could not identify tokens for a verdict answer")
         model_inputs = {key: value.to(self.device) for key, value in encoded.items()}
 
         handle = None
@@ -194,20 +294,52 @@ class HuggingFaceMathModel:
             if layer is None or not 0 <= layer < self.n_decoder_layers:
                 raise ValueError(f"Intervention layer must be in [0, {self.n_decoder_layers - 1}]")
             vector = self._torch.as_tensor(direction, device=self.device)
+            injection_boundaries = self._torch.as_tensor(
+                [boundary for boundary in boundaries for _ in range(2)], device=self.device
+            )
 
             def inject(_module, args):
                 hidden = args[0].clone()
-                hidden[:, boundary, :] += magnitude * vector.to(hidden.dtype)
+                batch_indices = self._torch.arange(hidden.shape[0], device=self.device)
+                hidden[batch_indices, injection_boundaries, :] += magnitude * vector.to(
+                    hidden.dtype
+                )
                 return (hidden, *args[1:])
 
             handle = self.decoder_layers[layer].register_forward_pre_hook(inject)
         try:
             with self._torch.inference_mode():
-                logits = self.model(**model_inputs, use_cache=False, return_dict=True).logits[0]
-                log_probs = self._torch.log_softmax(logits.float(), dim=-1)
-            token_ids = model_inputs["input_ids"][0]
-            scores = [log_probs[position - 1, token_ids[position]] for position in answer_positions]
-            return float(self._torch.stack(scores).mean().item())
+                logits = self.model(**model_inputs, use_cache=False, return_dict=True).logits
+            token_ids = model_inputs["input_ids"]
+            selected_logits = self._torch.stack(
+                [
+                    logits[batch_index, position - 1, :]
+                    for batch_index, positions in enumerate(answer_positions)
+                    for position in positions
+                ]
+            )
+            selected_token_ids = self._torch.stack(
+                [
+                    token_ids[batch_index, position]
+                    for batch_index, positions in enumerate(answer_positions)
+                    for position in positions
+                ]
+            )
+            del logits
+            selected_log_probs = self._torch.log_softmax(selected_logits.float(), dim=-1)
+            token_log_probs = selected_log_probs.gather(
+                1, selected_token_ids[:, None]
+            ).squeeze(1)
+            answer_scores = []
+            offset = 0
+            for positions in answer_positions:
+                count = len(positions)
+                answer_scores.append(float(token_log_probs[offset : offset + count].mean().item()))
+                offset += count
+            return [
+                answer_scores[index] - answer_scores[index + 1]
+                for index in range(0, len(answer_scores), 2)
+            ]
         finally:
             if handle is not None:
                 handle.remove()

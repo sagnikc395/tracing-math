@@ -25,7 +25,7 @@ yet. The paper directory still contains the unedited NeurIPS template.
 | Implement data, activation, probe, intervention, and plotting stages | Complete |
 | Provide a resumable Colab workflow | Complete |
 | Download all 3,400 ProcessBench traces locally | Complete |
-| Run the full end-to-end experiment on a T4 | Next |
+| Run the full end-to-end experiment on an A100 | Next |
 | Freeze the completed experiment and controls | Pending |
 | Interpret results and select the supported claim | Pending |
 | Replace the paper template with the five-page manuscript | Pending |
@@ -39,7 +39,7 @@ been generated.
 - **Data:** the official 3,400-example
   [Qwen/ProcessBench](https://huggingface.co/datasets/Qwen/ProcessBench), with a zero-indexed human
   label for the first erroneous step (`-1` means that every step is correct).
-- **Model:** `Qwen/Qwen2.5-Math-1.5B-Instruct` in FP16.
+- **Model:** `Qwen/Qwen2.5-Math-1.5B-Instruct` in BF16 for the A100 paper run.
 - **Representation:** residual-stream hidden states at the end marker of each reasoning step.
 - **Predictive test:** a class-balanced L2 logistic probe at every hidden-state index.
 - **Localization test:** the first validation-selected threshold crossing, compared with the
@@ -82,9 +82,9 @@ Use the all-in-one notebook:
 
 - [Open the experiment in Colab](https://colab.research.google.com/github/sagnikc395/tracing-mathematical-error-detection-in-language-models/blob/main/notebooks/experiment.ipynb)
 
-Select **Runtime → Change runtime type → T4 GPU** and run the notebook from the top. It uses the
-fixed paper configuration and Google Drive persistence, runs Experiments A--C, creates the essential
-paper figures, and publishes the checked result package to GitHub. See
+Select **Runtime → Change runtime type → A100 GPU** and run the notebook from the top. It uses the
+fixed paper configuration with BF16 A100 batches and Drive-backed checkpoints/logs, runs
+Experiments A--C, creates the essential paper figures, and publishes the checked result package. See
 [notebooks/README.md](notebooks/README.md) for authentication, workflow, and output details.
 
 ### Command line
@@ -115,15 +115,16 @@ context length.
 
 ### Runtime behavior
 
-- Extraction is sharded every 100 traces and resumes by skipping complete shards.
-- Each trace is forwarded once to collect every step boundary. Causal masking prevents a boundary
-  state from seeing later steps.
+- Extraction is sharded every 100 traces and resumes by skipping complete shards. Configurable
+  batches collect every trace's exact step boundaries without changing causal masking.
+- Intervention examples and both candidate answers are batched. Group-level checkpoints resume
+  learned-alpha and random-direction work after a disconnect.
 - Over-length traces are logged and excluded rather than truncated, because truncation could
   invalidate the annotated error location.
-- FP16 weights fit on a 16 GB T4. Quantization is excluded from the primary run because it changes
-  the activations under study.
-- Activation shards and final artifacts should be persisted to Google Drive before the Colab
-  runtime expires. Interventions are expected to be the slowest stage.
+- The paper notebook uses BF16 on an A100; the default batch size remains one for compatibility.
+  Quantization is excluded from the primary run because it changes the activations under study.
+- The paper notebook persists activation shards, intervention checkpoints, stage status, logs, and
+  final artifacts to Google Drive.
 
 ## Analysis and claim criteria
 
