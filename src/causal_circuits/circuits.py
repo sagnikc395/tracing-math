@@ -128,11 +128,15 @@ def _balanced_sample(frame: pd.DataFrame, target: str, per_class: int, seed: int
     if target not in frame:
         raise ValueError(f"Missing intervention target column {target!r}")
     groups = []
-    for label in (0, 1):
-        group = frame[frame[target] == label]
+    used_traces: set[str] = set()
+    for label in (1, 0):
+        group = frame[(frame[target] == label) & ~frame["trace_id"].isin(used_traces)]
         if group.empty:
             raise ValueError(f"No held-out intervention rows for class {label}")
-        groups.append(group.sample(n=min(per_class, len(group)), random_state=seed + label))
+        group = group.sample(frac=1, random_state=seed + label).drop_duplicates("trace_id")
+        chosen = group.sample(n=min(per_class, len(group)), random_state=seed + 10 + label)
+        groups.append(chosen)
+        used_traces.update(chosen["trace_id"].astype(str))
     return pd.concat(groups, ignore_index=True).sample(frac=1, random_state=seed)
 
 
