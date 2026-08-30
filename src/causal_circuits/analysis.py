@@ -158,8 +158,30 @@ def fit_layer_probes(
                 best_c,
             )
         )
+        erroneous_test = masks["test"] & metadata["has_error_trace"].eq(1).to_numpy()
+        erroneous_scores = classifier.predict_proba(scaler.transform(x[erroneous_test]))[:, 1]
+        metrics_rows.append(
+            _metric_row(
+                layer,
+                "test_error_traces",
+                metadata.loc[erroneous_test],
+                labels[erroneous_test],
+                erroneous_scores,
+                threshold,
+                best_c,
+            )
+        )
         layer_predictions = metadata.loc[
-            masks["test"], ["trace_id", "source", "step_index", "first_error"]
+            masks["test"],
+            [
+                "trace_id",
+                "source",
+                "generator",
+                "step_index",
+                "step_fraction",
+                "first_error",
+                "has_error_trace",
+            ],
         ].copy()
         layer_predictions["layer"] = layer
         layer_predictions["label"] = labels[masks["test"]]
@@ -445,6 +467,8 @@ def _validate_inputs(activations: np.ndarray, metadata: pd.DataFrame, target: st
         "step_fraction",
         "step_text",
         "first_error",
+        "generator",
+        "has_error_trace",
     }
     missing = required.difference(metadata.columns)
     if missing:

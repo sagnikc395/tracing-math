@@ -45,11 +45,13 @@ def test_layer_probe_pipeline_smoke() -> None:
             {
                 "trace_id": f"trace-{index}",
                 "source": "math" if index % 4 < 2 else "gsm8k",
+                "generator": "test-model",
                 "partition": partition,
                 "step_index": 0,
                 "step_fraction": 1.0,
                 "step_text": "wrong arithmetic" if label else "valid arithmetic",
                 "first_error": 0 if label else -1,
+                "has_error_trace": label,
                 "invalid_so_far": label,
             }
         )
