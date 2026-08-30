@@ -13,6 +13,4 @@ artifacts/*
 !artifacts/.gitkeep
 checkpoints/*
 !checkpoints/.gitkeep
-!checkpoints/protomech/
-!checkpoints/**/README.md
 .cache/
