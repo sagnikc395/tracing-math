@@ -22,6 +22,7 @@ class ProbeResults:
     controls: pd.DataFrame
     transfer: pd.DataFrame
     pca_curve: pd.DataFrame
+    bootstrap: pd.DataFrame
     directions: np.ndarray
     projection_stds: np.ndarray
     thresholds: np.ndarray
@@ -197,12 +198,25 @@ def fit_layer_probes(
         max_iter=config.max_iter,
         seed=seed,
     )
+    selected_predictions = pd.concat(prediction_rows, ignore_index=True)
+    selected_predictions = selected_predictions[
+        selected_predictions["layer"] == selected_layer
+    ].copy()
+    bootstrap = group_bootstrap_metrics(
+        selected_predictions,
+        selected_predictions["label"].to_numpy(),
+        selected_predictions["score"].to_numpy(),
+        float(thresholds[selected_layer]),
+        samples=config.bootstrap_samples,
+        seed=seed,
+    )
     return ProbeResults(
         metrics=metrics,
         predictions=pd.concat(prediction_rows, ignore_index=True),
         controls=controls,
         transfer=transfer,
         pca_curve=pca_curve,
+        bootstrap=bootstrap,
         directions=directions,
         projection_stds=projection_stds,
         thresholds=thresholds,
@@ -210,6 +224,44 @@ def fit_layer_probes(
         selected_layer=selected_layer,
         selected_intervention_layer=selected_intervention_layer,
     )
+
+
+def group_bootstrap_metrics(
+    metadata: pd.DataFrame,
+    labels: np.ndarray,
+    scores: np.ndarray,
+    threshold: float,
+    *,
+    samples: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Bootstrap whole traces, preserving within-trace step dependence."""
+    if samples < 1:
+        return pd.DataFrame()
+    frame = metadata[["trace_id", "step_index", "first_error"]].copy()
+    frame["label"] = np.asarray(labels, dtype=int)
+    frame["score"] = np.asarray(scores, dtype=float)
+    trace_ids = frame["trace_id"].unique()
+    trace_groups = {
+        trace_id: group.copy() for trace_id, group in frame.groupby("trace_id", sort=False)
+    }
+    rng = np.random.default_rng(seed)
+    rows = []
+    for sample_index in range(samples):
+        draws = rng.choice(trace_ids, size=len(trace_ids), replace=True)
+        pieces = []
+        for draw_index, trace_id in enumerate(draws):
+            piece = trace_groups[trace_id].copy()
+            piece["trace_id"] = f"bootstrap-{draw_index}"
+            pieces.append(piece)
+        sampled = pd.concat(pieces, ignore_index=True)
+        row = {
+            "sample": sample_index,
+            **binary_metrics(sampled["label"].to_numpy(), sampled["score"].to_numpy()),
+            **change_point_metrics(sampled, sampled["score"].to_numpy(), threshold),
+        }
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def evaluate_controls(

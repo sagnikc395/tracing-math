@@ -7,6 +7,7 @@ from causal_circuits.analysis import (
     change_point_metrics,
     choose_threshold,
     fit_layer_probes,
+    group_bootstrap_metrics,
 )
 from causal_circuits.config import ProbeConfig
 
@@ -69,3 +70,23 @@ def test_layer_probe_pipeline_smoke() -> None:
     assert result.directions.shape == (3, 6)
     assert result.selected_intervention_layer in {0, 1}
     assert len(result.transfer) == 4
+
+
+def test_bootstrap_samples_whole_traces() -> None:
+    metadata = pd.DataFrame(
+        {
+            "trace_id": ["bad", "bad", "good", "good"],
+            "step_index": [0, 1, 0, 1],
+            "first_error": [1, 1, -1, -1],
+        }
+    )
+    result = group_bootstrap_metrics(
+        metadata,
+        np.array([0, 1, 0, 0]),
+        np.array([0.1, 0.9, 0.1, 0.2]),
+        0.5,
+        samples=10,
+        seed=42,
+    )
+    assert len(result) == 10
+    assert set(result.columns) >= {"auroc", "process_f1", "first_error_exact"}

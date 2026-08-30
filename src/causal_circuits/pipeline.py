@@ -140,6 +140,7 @@ def fit_and_save_probes(config: ExperimentConfig) -> ProbeResults:
     results.controls.to_csv(output / "controls.csv", index=False)
     results.transfer.to_csv(output / "domain_transfer.csv", index=False)
     results.pca_curve.to_csv(output / "pca_subspace.csv", index=False)
+    results.bootstrap.to_csv(output / "test_group_bootstrap.csv", index=False)
     np.savez(
         output / "directions.npz",
         directions=results.directions,
