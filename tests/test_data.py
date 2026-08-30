@@ -46,8 +46,6 @@ def test_jsonl_round_trip(tmp_path) -> None:
 
 def test_problem_duplicates_stay_in_the_same_partition() -> None:
     traces = [make_trace("a"), make_trace("b"), make_trace("c", problem="Different")]
-    assignments = assign_partitions(
-        traces, seed=42, train_fraction=0.6, validation_fraction=0.2
-    )
+    assignments = assign_partitions(traces, seed=42, train_fraction=0.6, validation_fraction=0.2)
     assert assignments["a"] == assignments["b"]
     assert set(assignments.values()).issubset({"train", "validation", "test"})

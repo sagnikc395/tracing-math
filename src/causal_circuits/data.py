@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
-
 
 SYSTEM_PROMPT = (
     "You are a mathematical reasoning verifier. Read the problem and numbered reasoning "
@@ -48,7 +47,7 @@ class ProcessTrace:
         return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:16]
 
     @classmethod
-    def from_record(cls, record: dict, source: str | None = None) -> "ProcessTrace":
+    def from_record(cls, record: dict, source: str | None = None) -> ProcessTrace:
         return cls(
             trace_id=str(record.get("trace_id", record.get("id", ""))),
             source=str(source or record.get("source", "unknown")),
@@ -75,7 +74,9 @@ def load_huggingface_traces(
     try:
         from datasets import load_dataset
     except ImportError as error:
-        raise RuntimeError("Install project dependencies before downloading ProcessBench") from error
+        raise RuntimeError(
+            "Install project dependencies before downloading ProcessBench"
+        ) from error
 
     traces: list[ProcessTrace] = []
     for split in splits:

@@ -62,7 +62,7 @@ class ExperimentConfig:
     intervention: InterventionConfig
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
+    def from_yaml(cls, path: str | Path) -> ExperimentConfig:
         config_path = Path(path)
         raw = yaml.safe_load(config_path.read_text())
         if not isinstance(raw, dict):

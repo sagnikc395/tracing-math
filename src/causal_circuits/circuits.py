@@ -12,9 +12,7 @@ from causal_circuits.data import ProcessTrace
 from causal_circuits.models import HuggingFaceMathModel
 
 
-def random_orthogonal_directions(
-    direction: np.ndarray, count: int, *, seed: int
-) -> np.ndarray:
+def random_orthogonal_directions(direction: np.ndarray, count: int, *, seed: int) -> np.ndarray:
     """Create unit random directions orthogonal to the learned probe direction."""
     direction = np.asarray(direction, dtype=np.float64)
     direction /= np.linalg.norm(direction)
@@ -116,7 +114,10 @@ def summarize_interventions(frame: pd.DataFrame) -> pd.DataFrame:
         .agg(
             mean_verdict_score=("verdict_score", "mean"),
             mean_delta=("delta_verdict_score", "mean"),
-            standard_error=("verdict_score", lambda values: values.std(ddof=1) / np.sqrt(len(values))),
+            standard_error=(
+                "verdict_score",
+                lambda values: values.std(ddof=1) / np.sqrt(len(values)),
+            ),
             n=("verdict_score", "size"),
         )
         .sort_values(["direction_type", "direction_index", "alpha"])

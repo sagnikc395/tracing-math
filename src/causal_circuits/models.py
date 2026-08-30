@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Sequence
 
 import numpy as np
 
-from causal_circuits.data import ProcessTrace, SYSTEM_PROMPT, format_user_content
+from causal_circuits.data import SYSTEM_PROMPT, ProcessTrace, format_user_content
 
 
 class TraceTooLongError(ValueError):
@@ -35,7 +35,9 @@ class HuggingFaceMathModel:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as error:
-            raise RuntimeError("Install the project dependencies before loading the model") from error
+            raise RuntimeError(
+                "Install the project dependencies before loading the model"
+            ) from error
 
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -102,9 +104,7 @@ class HuggingFaceMathModel:
         return model_inputs, boundaries
 
     @staticmethod
-    def _marker_token_index(
-        rendered: str, marker: str, offsets: Sequence[Sequence[int]]
-    ) -> int:
+    def _marker_token_index(rendered: str, marker: str, offsets: Sequence[Sequence[int]]) -> int:
         start = rendered.find(marker)
         if start < 0 or rendered.find(marker, start + 1) >= 0:
             raise ValueError(f"Expected exactly one marker {marker!r} in the rendered prompt")
@@ -133,7 +133,10 @@ class HuggingFaceMathModel:
             [hidden[0, boundaries, :].detach().float().cpu() for hidden in output.hidden_states],
             dim=1,
         ).numpy()
-        return TraceActivations(values=values.astype(np.float16), token_count=len(model_inputs["input_ids"][0]))
+        return TraceActivations(
+            values=values.astype(np.float16),
+            token_count=len(model_inputs["input_ids"][0]),
+        )
 
     def verdict_score(
         self,
@@ -181,9 +184,7 @@ class HuggingFaceMathModel:
         if encoded["input_ids"].shape[1] > self.max_length:
             raise TraceTooLongError("Verdict prompt exceeds the configured context limit")
         offsets = encoded.pop("offset_mapping")[0].tolist()
-        answer_positions = [
-            index for index, (_, end) in enumerate(offsets) if end > len(rendered)
-        ]
+        answer_positions = [index for index, (_, end) in enumerate(offsets) if end > len(rendered)]
         if not answer_positions or answer_positions[0] == 0:
             raise RuntimeError(f"Could not identify tokens for answer {answer!r}")
         model_inputs = {key: value.to(self.device) for key, value in encoded.items()}
@@ -191,9 +192,7 @@ class HuggingFaceMathModel:
         handle = None
         if direction is not None and magnitude != 0.0:
             if layer is None or not 0 <= layer < self.n_decoder_layers:
-                raise ValueError(
-                    f"Intervention layer must be in [0, {self.n_decoder_layers - 1}]"
-                )
+                raise ValueError(f"Intervention layer must be in [0, {self.n_decoder_layers - 1}]")
             vector = self._torch.as_tensor(direction, device=self.device)
 
             def inject(_module, args):

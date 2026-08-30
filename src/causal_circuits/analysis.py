@@ -61,9 +61,7 @@ def change_point_metrics(
     error_accuracy = _safe_mean(predicted_array[error_mask] == expected_array[error_mask])
     correct_accuracy = _safe_mean(predicted_array[correct_mask] == -1)
     denominator = error_accuracy + correct_accuracy
-    process_f1 = (
-        2 * error_accuracy * correct_accuracy / denominator if denominator > 0 else 0.0
-    )
+    process_f1 = 2 * error_accuracy * correct_accuracy / denominator if denominator > 0 else 0.0
     exact_accuracy = _safe_mean(predicted_array == expected_array)
     return {
         "error_accuracy": error_accuracy,
@@ -147,9 +145,7 @@ def fit_layer_probes(
         if norm == 0:
             raise RuntimeError(f"Layer {layer} produced a zero probe direction")
         directions[layer] = direction / norm
-        projection_stds[layer] = max(
-            float(np.std(x[fit_mask] @ directions[layer], ddof=1)), 1e-8
-        )
+        projection_stds[layer] = max(float(np.std(x[fit_mask] @ directions[layer], ddof=1)), 1e-8)
         metrics_rows.append(
             _metric_row(
                 layer,
@@ -231,7 +227,9 @@ def evaluate_controls(
 
     position = metadata[["step_index", "step_fraction"]].to_numpy(dtype=np.float32)
     rows.append(
-        _fit_control("position", position, metadata, labels, train, validation, test, max_iter, seed)
+        _fit_control(
+            "position", position, metadata, labels, train, validation, test, max_iter, seed
+        )
     )
 
     vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=20_000)
@@ -245,7 +243,9 @@ def evaluate_controls(
     validation_scores = classifier.predict_proba(x_validation)[:, 1]
     threshold = choose_threshold(metadata.loc[validation], validation_scores)
     scores = classifier.predict_proba(x_test)[:, 1]
-    rows.append(_control_row("current-step TF-IDF", metadata.loc[test], labels[test], scores, threshold))
+    rows.append(
+        _control_row("current-step TF-IDF", metadata.loc[test], labels[test], scores, threshold)
+    )
 
     rng = np.random.default_rng(seed)
     shuffled = labels[train].copy()
@@ -254,7 +254,9 @@ def evaluate_controls(
     validation_scores = classifier.predict_proba(scaler.transform(hidden[validation]))[:, 1]
     threshold = choose_threshold(metadata.loc[validation], validation_scores)
     scores = classifier.predict_proba(scaler.transform(hidden[test]))[:, 1]
-    rows.append(_control_row("shuffled-label hidden", metadata.loc[test], labels[test], scores, threshold))
+    rows.append(
+        _control_row("shuffled-label hidden", metadata.loc[test], labels[test], scores, threshold)
+    )
     return pd.DataFrame(rows)
 
 
@@ -274,9 +276,7 @@ def domain_transfer(
         validation = metadata["source"].eq(train_source) & metadata["partition"].eq("validation")
         if labels[train].min() == labels[train].max():
             continue
-        scaler, classifier = _fit_logistic(
-            hidden[train], labels[train], c_value, max_iter, seed
-        )
+        scaler, classifier = _fit_logistic(hidden[train], labels[train], c_value, max_iter, seed)
         validation_scores = classifier.predict_proba(scaler.transform(hidden[validation]))[:, 1]
         threshold = choose_threshold(metadata.loc[validation], validation_scores)
         for test_source in sources:
@@ -319,9 +319,7 @@ def pca_subspace_curve(
         )[:, 1]
         threshold = choose_threshold(metadata.loc[validation], validation_scores)
         scores = classifier.predict_proba(scaler.transform(transformed[test, :dimension]))[:, 1]
-        row = _control_row(
-            "PCA subspace", metadata.loc[test], labels[test], scores, threshold
-        )
+        row = _control_row("PCA subspace", metadata.loc[test], labels[test], scores, threshold)
         row["dimensions"] = dimension
         row["variance_explained"] = float(pca.explained_variance_ratio_[:dimension].sum())
         rows.append(row)
