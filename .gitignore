@@ -5,12 +5,7 @@ __pycache__/
 *.egg-info/
 *.py[cod]
 
-data/raw/*
-!data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
 artifacts/*
-!artifacts/.gitkeep
-checkpoints/*
-!checkpoints/.gitkeep
 .cache/
