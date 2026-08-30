@@ -121,6 +121,7 @@ artifacts/qwen2.5-math-1.5b/
 │   ├── controls.csv
 │   ├── domain_transfer.csv
 │   ├── pca_subspace.csv
+│   ├── test_group_bootstrap.csv
 │   └── directions.npz
 ├── interventions/
 │   ├── behavioral_verdict.json

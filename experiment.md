@@ -1,689 +1,382 @@
-Yes — there is a very plausible workshop paper here, but with the time/compute constraint I would **not** try to invent a new protein model or train a new SAE/transcoder. I would build a tight mechanistic-interpretability study around **why a protein language model makes zero-shot mutation-effect predictions**, using existing pretrained interpretability machinery and ProteinGym as experimental validation.
+# Experiment protocol: when does a math model know the reasoning went wrong?
 
-The workshop is almost tailor-made for this framing. Its stated goal is not generic explainability; it specifically asks whether interpretability can turn learned representations into **novel, testable knowledge**, including methods for unfamiliar modalities, empirical discovery case studies, and well-executed negative/failure results. ([Interpretability for Discovery][1]) The submission is only **5 main-text pages**, double-blind and non-archival, and reproducibility/code availability will explicitly be considered. ([Interpretability for Discovery][2])
+Status: preregistered analysis plan, written before viewing experimental results.
 
-## My first-choice paper
+Submission target: NeurIPS 2026 Workshop on Interpretability for Discovery. The current CFP
+specifies a September 2, 2026, 11:59:59 PM AoE deadline, five pages of main text, double-blind
+review, and a mandatory responsible-use statement. Requirements should be checked again on the
+[official CFP](https://interpretability4discovery.github.io/cfp.html) before submission.
 
-### **What Does ESM-2 Use to Score Mutations? Causal Circuits for Zero-Shot Variant Effects**
+## 1. Research claim
 
-The central question would be:
+The study asks whether a math-specialized causal language model contains a domain-general
+internal change-point signal when a written solution first becomes mathematically invalid, and
+whether manipulating that signal changes the model's own correctness judgment.
 
-> **Can the zero-shot mutation-effect predictions of a protein language model be reduced to a small causal circuit of interpretable protein features, and do those features identify experimentally constrained functional residues?**
+The intended discovery is about learned mathematical monitoring, not a new mathematical theorem:
 
-That question cleanly connects all four papers you gave me.
+> A model may represent the transition from valid to invalid reasoning at a reproducible layer,
+> in a direction that transfers across problem sources and participates in its explicit verdict.
 
-### Why the four papers point to this gap
+This is stronger than showing that hidden states correlate with erroneous text. Three kinds of
+evidence are required: temporal localization at the annotated error, transfer across mathematical
+domains, and a held-out causal intervention.
 
-| Prior work                     | What it gives you                                                                                                                                                                             | What is still missing                                                                                                                                                                               |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Meier et al., NeurIPS 2021** | Shows that masked-language-model probabilities can predict DMS mutation effects zero-shot. ([NeurIPS Proceedings][3])                                                                         | It tells us **that** the model predicts functional effects, not **what internal computation causes those predictions**.                                                                             |
-| **ProteinGym**                 | >250 standardized DMS assays, millions of mutants, structures and model scores; an excellent source of external experimental ground truth. ([PubMed][4])                                      | Primarily a benchmark; it does not mechanistically explain the PLMs.                                                                                                                                |
-| **ProtoMech**                  | Cross-layer transcoders recover sparse pLM circuits; <1% of latents can retain substantial task performance, and the authors release ESM2-8M/35M models and a Colab workflow. ([alphaXiv][5]) | Their DMS/function circuits are anchored mainly to **supervised function-prediction probes**, rather than directly explaining the native masked-marginal zero-shot computation. ([ResearchGate][6]) |
-| **Nainani et al.**             | Gives you causal activation/feature patching for pLMs and finds an early-motif → later-domain mechanism for contact prediction. ([BioRxiv][7])                                                | It studies **contact prediction in two case-study proteins**, rather than mutation-effect/fitness prediction across a DMS landscape.                                                                |
+## 2. Hypotheses and falsifiers
 
-So your gap is not:
+### H1 — a localized internal change point
 
-> “SAEs find biological features.”
+At one or more hidden-state indices, a linear probe will distinguish prefixes that remain valid
+from prefixes at or after the first erroneous step. More importantly, the first validation-tuned
+threshold crossing will align with the human first-error annotation.
 
-That is already crowded.
+Evidence for H1 requires all of the following:
 
-It is:
+- held-out step AUROC above chance with a trace-grouped 95% bootstrap interval;
+- held-out ProcessBench first-error F1 above the position and lexical controls;
+- above-chance AUROC when evaluation is restricted to erroneous traces, comparing their pre-error
+  and post-error steps without relying on fully correct versus incorrect solution identity.
 
-> **“What sparse causal computation inside ESM-2 produces the classical zero-shot mutation-effect signal, and does the resulting circuit correspond to experimentally measured functional constraint?”**
+H1 is weakened if the signal appears only on late downstream steps, if the position baseline
+matches it, or if within-erroneous-trace AUROC collapses.
 
-That is much sharper.
+### H2 — a partially shared mathematical-invalidity direction
 
----
+A direction trained on one ProcessBench source will transfer to at least some other sources. The
+four sources are GSM8K, MATH, OlympiadBench, and Omni-MATH.
 
-# Why I think this is the best target
+Evidence for H2 is an off-diagonal transfer matrix consistently above chance, not merely strong
+within-source performance. Report every cell. Do not hide a domain where transfer fails. A mixed
+matrix supports a narrower conclusion: mathematical invalidity is partly domain-specific.
 
-It hits all three pieces the workshop appears to care about:
+### H3 — causal influence on the model's verdict
 
-**Interpretability:** you extract/ablate a sparse internal circuit.
+Adding the invalidity direction at a held-out step boundary will increase
 
-**Scientific knowledge:** the circuit nominates residues/motifs that the model considers causally important.
+\[
+\Delta_{\mathrm{verdict}}
+= \overline{\log P(\texttt{INCORRECT})}
+- \overline{\log P(\texttt{CORRECT})},
+\]
 
-**Validation:** you compare those nominations against independently measured DMS fitness—not against another model-generated annotation.
+while subtracting it will decrease this score. The bars denote mean token log probability, which
+reduces bias from different answer token counts.
 
-That last part is important. Instead of saying:
+Evidence for H3 requires a signed, approximately monotonic dose response and an effect at the
+largest preregistered magnitude that exceeds the matched random-orthogonal direction distribution.
+The claim must be rejected or softened if the unmodified model has no measurable correctness
+behavior, if positive and negative interventions do not have opposite effects, or if random
+directions behave similarly.
 
-> “This latent looks like a catalytic-site detector.”
+## 3. Fixed resources
 
-you can say:
+### Dataset
 
-> “We extracted this latent without using the DMS labels. Residues receiving high causal attribution are significantly more intolerant to mutation in the experimental DMS.”
+Use the official Apache-2.0 `Qwen/ProcessBench` Hugging Face dataset and all four released splits.
+Each record contains:
 
-That is a much stronger discovery story.
+- a problem;
+- a model-generated list of reasoning steps;
+- the generator name;
+- whether the final answer is correct;
+- `label`, the zero-indexed first erroneous step or `-1` when all steps are correct.
 
----
+No synthetic corruption or LLM labeling is used. ProcessBench is normally an evaluation set; in
+this study it is explicitly repartitioned into internal train, validation, and test groups for a
+representation-analysis experiment. Consequently, the paper must not present the resulting probe
+numbers as standard ProcessBench benchmark scores.
 
-# A concrete experiment that is realistic on Colab
+### Model
 
-Do **not** train ProtoMech's CLT. Its paper reports training on five million UniRef50 sequences, and the CLT has substantially more parameters than ESM2-8M. ([ResearchGate][8])
+Primary model: `Qwen/Qwen2.5-Math-1.5B-Instruct`, loaded in FP16. This is small enough for a Colab
+T4 while retaining math-specific instruction tuning. Do not substitute a newer model after seeing
+results. A second model is optional only after every primary analysis and figure is frozen.
 
-Use the released checkpoints. The official repository supports **ESM2-8M and ESM2-35M**, has pretrained models, custom circuit discovery, and an interactive Colab notebook. ([GitHub][9])
+No LLM parameters are trained. Only scikit-learn logistic probes are fitted on cached states.
 
-[ProtoMech repository and Colab workflow](https://github.com/amirgroup-codes/ProtoMech?utm_source=chatgpt.com)
+### Context policy
 
-Start with **8M**. Only move to 35M after the entire pipeline works.
+Set the maximum complete prompt length to 2,048 tokens. Exclude and log a trace when the complete
+prompt is longer. Never truncate a problem or solution: doing so can move or remove the annotated
+error and creates invalid labels. Report the number and source distribution of exclusions.
 
-### Step 1 — reproduce the ordinary zero-shot score
+## 4. Unit of analysis and labels
 
-For a substitution \(x_i^{WT}\rightarrow x_i^{mut}\), use the Meier masked-marginal score:
+Let trace $i$ contain steps $s_{i1},\ldots,s_{iK_i}$ and first-error index $e_i$. At each step
+boundary $k$, define
 
-$$
-s_i(mut)
-=
-\log P(x_i^{mut}\mid x_{\setminus i})
--
-\log P(x_i^{WT}\mid x_{\setminus i})
-$$
+\[
+y_{ik}=\mathbb{1}[e_i \ge 0 \land k \ge e_i].
+\]
 
-where residue \(i\) is masked.
+Thus, a correct trace contributes only negative examples. An erroneous trace contributes negative
+examples before its first error and positive examples from the first error onward. The primary
+target is `invalid_so_far`; `error_onset`, which is positive only at $k=e_i$, is retained as a
+diagnostic and must not replace the primary target after results are observed.
 
-This is the exact family of scores underlying the original zero-shot mutation-effect work. ([NeurIPS Proceedings][3])
+The statistical grouping unit is the normalized problem, not the step. All steps and duplicate
+traces for the same normalized problem receive one partition.
 
-Pick **one primary protein**, not twenty.
+## 5. Prompt and activation extraction
 
-I would seriously consider a well-characterized enzyme with a nearly complete single-mutant DMS such as **TEM-1 β-lactamase/Firnberg**. It gives you obvious catalytic motifs/residues for post-hoc validation while not simply repeating ProtoMech's showcased GB1/GFP examples.
+The user message contains the problem and blocks of the form:
 
-Then use **one secondary protein** only if everything works.
+```text
+[Step 0]
+<step text>
+<<END_STEP_0>>
+```
 
----
+After the final displayed step, it asks whether the reasoning is valid up to and including that
+step. The system asks for exactly `CORRECT` or `INCORRECT`.
 
-## Step 2 — trace the zero-shot computation
+For a trace, run the full prompt once with `output_hidden_states=True` and cache the residual state
+at every `<<END_STEP_k>>` token. In a causal transformer, later reasoning steps and the verdict
+question cannot influence an earlier boundary state. This reduces the full extraction from one
+forward pass per prefix to one pass per trace without changing the prefix representation.
 
-This is the actual contribution.
+For hidden-state index $\ell$:
 
-Run the masked sequence through the pretrained CLT/SAE representation and calculate an attribution score for latent-token pairs to the mutant-versus-WT logit margin.
+\[
+h_{ik}^{(\ell)} \in \mathbb{R}^d.
+\]
 
-Conceptually:
+Index zero is the embedding output; subsequent indices are transformer block outputs. The final
+hidden-state index can be probed but is ineligible for intervention because no later decoder block
+would propagate a modified boundary state to verdict tokens.
 
-$$
-A_{l,j,i}
-=
-z_{l,j,i}
-\frac{\partial s_i}{\partial z_{l,j,i}}
-$$
+## 6. Partitions and leakage prevention
 
-where \(z_{l,j,i}\) is latent \(j\), layer \(l\), residue/token \(i\).
+Use seed 42. Form groups by SHA-1 of whitespace-normalized, case-folded problem text. Within each
+`source × has_error` stratum, sort groups by a seeded SHA-256 digest and allocate 60% train, 20%
+validation, and 20% test. This makes the partition deterministic, balanced by source/error status,
+and invariant to step expansion.
 
-Aggregate the absolute attribution over mutations:
+Rules:
 
-$$
-A_{l,j}=\mathbb E_m |A_{l,j,m}|.
-$$
+- never split individual steps;
+- fit scalers and probes on training states only during hyperparameter selection;
+- select $C \in \{0.01,0.1,1,10\}$ by validation AUROC;
+- select the probability crossing threshold by validation ProcessBench F1;
+- select the reported layer by validation ProcessBench F1, breaking ties with validation AUROC;
+- after selection, refit that layer's scaler and probe on train plus validation;
+- use test data only for final metrics, trajectories, and causal examples.
 
-Then rank latents and retain the top \(k\).
+## 7. Experiment A: layer-wise decodability and localization
 
-You do **not** need to claim this particular attribution formula is theoretically optimal. The interesting experiment is what happens when you causally intervene afterward.
+At every hidden-state index, fit a class-balanced logistic regression:
 
----
+\[
+P(y_{ik}=1\mid h_{ik}^{(\ell)})
+=\sigma(w_\ell^\top h_{ik}^{(\ell)}+b_\ell).
+\]
 
-# The most important plot
+Report on the held-out test set:
 
-Make a **circuit recovery curve**.
+- step AUROC and average precision;
+- erroneous-trace first-error accuracy;
+- correct-trace accuracy (predict no error);
+- their harmonic mean, matching the ProcessBench balancing principle;
+- overall exact first-error accuracy;
+- step AUROC restricted to erroneous traces;
+- 95% percentile intervals from 1,000 resamples of whole traces.
 
-x-axis:
+Plot AUROC and first-error F1 against hidden-state index. A rising curve is descriptive; the main
+result is the validation-selected layer's held-out localization.
 
-> fraction / number of latent-token components retained
+### Required controls
 
-y-axes:
+1. **Position:** logistic regression on absolute step index and fractional position.
+2. **Lexical:** TF-IDF unigrams and bigrams from the current step only.
+3. **Shuffled labels:** identical hidden-state probe with shuffled training labels.
+4. **Embedding state:** hidden-state index zero, already present in the layer curve.
+5. **Within-error traces:** compare pre-error and post-error steps only among traces known to have
+   an error; this reduces generator and final-correctness shortcuts.
 
-1. correlation between **circuit zero-shot scores and full ESM2 scores**
-2. correlation between **circuit scores and experimental DMS fitness**
+If the hidden-state probe does not beat position and lexical controls, stop causal-mechanism claims
+and write the result as a shortcut/failure analysis.
 
-For example:
+## 8. Experiment B: cross-domain transfer
 
-| model                  | Full ESM score fidelity | DMS Spearman |
-| ---------------------- | ----------------------: | -----------: |
-| Full ESM2              |                    1.00 |       ρ_full |
-| Top 1% circuit         |                       … |            … |
-| Top 0.5% circuit       |                       … |            … |
-| Top 0.1% circuit       |                       … |            … |
-| Random matched circuit |                       … |            … |
+At the validation-selected layer, train separate probes on the training portion of one source.
+Choose the threshold on that source's validation portion, then evaluate it on the test portion of
+all four sources. Produce the full 4×4 AUROC and first-error-F1 matrices.
 
-If a very small circuit preserves most of the DMS-ranking signal, that is immediately paper-worthy evidence.
+Interpretation:
 
-ProtoMech already reports highly compressed circuits on supervised family/function tasks, so the conceptual question here becomes whether the same phenomenon holds for the **native zero-shot mutation mechanism**. ([alphaXiv][10])
+- strong off-diagonal transfer suggests a shared invalidity representation;
+- asymmetric transfer suggests that some domains learn a more general direction;
+- diagonal-only success suggests domain- or style-specific error features;
+- uniformly weak performance invalidates H2.
 
----
+Generator-wise results may be reported as a diagnostic, but no generator subgroup becomes the
+primary result after inspection.
 
-# Step 3 — sufficiency and necessity
+## 9. Experiment C: causal probe-direction intervention
 
-Don't stop at attribution.
+For the best intervention-eligible layer selected on validation data, convert the standardized
+probe to raw hidden coordinates:
 
-This workshop is specifically sensitive to the difference between an attractive feature visualization and evidence that the feature matters. The workshop page itself says discovery requires more than a compelling visualization. ([Interpretability for Discovery][1])
+\[
+\widetilde w_j = w_j / \mathrm{scale}_j,
+\qquad
+v = \widetilde w / \lVert\widetilde w\rVert_2.
+\]
 
-Do two interventions.
+Let $\sigma_v$ be the standard deviation of $h^\top v$ on train plus validation states. Select at
+most one boundary from each held-out trace, with disjoint traces between classes. For up to 128
+valid and 128 invalid-so-far boundaries, intervene at the input to the corresponding decoder block:
 
-### Sufficiency
+\[
+h' = h + \alpha\sigma_v v,
+\qquad
+\alpha\in\{-4,-2,-1,0,1,2,4\}.
+\]
 
-Keep only your top \(k\) latent components.
+The intervention occurs at the reasoning boundary, before the later question tokens. Measure the
+model's length-normalized teacher-forced log-probability margin for `INCORRECT` versus `CORRECT`.
+First report the unmodified verdict AUROC and zero-threshold accuracy. If those are at chance, the
+intervention can establish an effect on a readout but not a useful native error-monitoring behavior.
 
-Ask:
+### Random controls
 
-> How much of the zero-shot mutation-ranking behavior remains?
+Sample 20 unit directions orthogonal to $v$. Match intervention norm using the same $\sigma_v$.
+To fit the T4 budget, evaluate random directions on 16 examples per class and the two extreme
+nonzero alphas. Compare learned-direction change from each example's own baseline with the random
+distribution. The learned direction uses the full dose curve and full preregistered sample.
 
-### Necessity
+Do not interpret an intervention at a single alpha without the signed curve. Report both valid and
+invalid starting states separately in the paper or appendix.
 
-Take the otherwise complete replacement model and **ablate those same components**.
+## 10. Secondary analysis: top-variance subspace accessibility
 
-Compare against 20–100 random matched-size ablations.
+At the selected layer, fit PCA on training hidden states only. Fit probes using the first
+1, 2, 4, 8, 16, 32, 64, and 128 components, omitting dimensions larger than the available rank.
+Report variance explained and held-out AUROC.
 
-If:
+This answers whether the invalidity signal is accessible in a small high-variance subspace. It
+does **not** estimate intrinsic dimensionality and should remain an appendix result unless it is
+needed to explain a core finding.
 
-$$
-\Delta \rho_{\mathrm{top\ circuit}}
-\gg
-\Delta \rho_{\mathrm{random}},
-$$
+## 11. Computational plan for one Colab T4
 
-you have causal evidence, not just a correlation.
+Priority order:
 
-This also directly follows the methodological direction of the Nainani paper, whose released code already supports performance recovery curves, feature ablation and path patching. ([GitHub][11])
+1. smoke test with 25 traces per source and a separate `artifacts/smoke` directory;
+2. full data download and sharded activation extraction;
+3. layer probes, required controls, bootstrap, and transfer matrix;
+4. causal verdict baseline and learned-direction dose response;
+5. random causal controls;
+6. PCA curve and any optional robustness checks.
 
-[Nainani et al. pLM circuit code](https://github.com/NainaniJatinZ/plm_circuits?utm_source=chatgpt.com)
+The model is loaded in FP16, processes one trace at a time, and immediately moves selected
+boundary states to CPU as FP16 arrays. Activation shards are written every 100 traces. Completed
+shards are resumable. Do not spend the deadline on 7B models, SAE training, LoRA, generated
+counterfactual data, or multiple prompt variants before the core three experiments are frozen.
 
----
+## 12. Decision table for the paper narrative
 
-# Step 4 — the scientific-discovery validation
+| Observation | Defensible conclusion |
+| --- | --- |
+| Probe, localization, transfer, and causal test succeed | A partially general internal invalidity direction participates in the model's verdict. |
+| Probe succeeds, localization fails | Error-related information exists, but not as an accurate internal change point. |
+| Probe/localization succeed, transfer fails | Error monitoring is domain- or style-specific. |
+| Probe succeeds, causal test matches random controls | Decodability is not evidence of a causal error-monitoring mechanism. |
+| Causal effect exists but baseline verdict is chance | The direction controls the prompted readout, but useful native monitoring is unestablished. |
+| Position or TF-IDF matches the probe | The apparent signal is plausibly a dataset/prompt shortcut. |
 
-Now take the attribution back to biology.
+Negative outcomes remain relevant to the workshop because they identify when interpretability
+does not support reliable discovery. The abstract must state the observed row of this table, not
+the hoped-for row.
 
-For every residue \(i\), calculate something like
+## 13. Figures and five-page allocation
 
-$$
-C_i=\sum_{l,j}|A_{l,j,i}|.
-$$
+Core figures:
 
-This produces a **mechanistic importance score per residue**.
+1. method schematic plus an example error-score trajectory aligned to the human error;
+2. layer-wise test AUROC/F1 with control table and bootstrap intervals;
+3. cross-domain transfer heatmap and causal dose-response inset.
 
-Separately, from the DMS, estimate experimentally observed mutational intolerance, for example:
+Suggested main-text allocation:
 
-$$
-D_i=-\operatorname{median}_{a\ne WT}
-\text{fitness}(i\rightarrow a).
-$$
+- 0.6 page: abstract and motivation;
+- 0.7 page: related work and exact gap;
+- 1.1 pages: data, representation, leakage-safe design, controls;
+- 1.7 pages: three core results;
+- 0.6 page: limitations, discovery implications, responsible use;
+- 0.3 page: conclusion.
 
-Now ask:
+Keep PCA, subgroup tables, exclusion details, prompt text, and expanded intervention controls in
+the appendix while making the main text self-contained.
 
-### Does circuit importance predict experimentally constrained residues?
+## 14. Limitations to state regardless of outcome
 
-Compute:
+- One 1.5B instruction-tuned model cannot establish universality across architectures or scales.
+- ProcessBench contains model-generated written solutions; results need not transfer to latent
+  reasoning without an explicit chain of thought.
+- `invalid_so_far` labels all post-error steps positive, although some later steps may be locally
+  valid conditional on an earlier mistake.
+- A linear direction can causally affect a verdict without corresponding to a human-like concept
+  of mathematical validity.
+- Step markers and the verifier prompt may alter the model's computation.
+- Excluding long traces can shift the evaluated difficulty distribution.
+- Domain transfer may partly measure writing-style transfer rather than mathematical abstraction.
+- Teacher-forced label margins are a narrow behavioral readout, not a complete critic evaluation.
 
-* Spearman \(C_i\) versus \(D_i\)
-* AUROC for top 10% most intolerant residues
-* enrichment around known active/catalytic/binding residues
-* randomization/bootstrap confidence intervals.
+## 15. Responsible-use statement draft
 
-This is the piece I would emphasize in the title/abstract.
+This work studies whether language-model internals can help identify errors in mathematical
+reasoning. Such signals could support auditing and human review, but they may also encourage
+overreliance on an imperfect automated verifier. A decodable or steerable direction does not prove
+that a solution is mathematically correct. We therefore report shortcut controls, negative
+results, uncertainty, and domain failures; release prompts and code; and recommend that internal
+scores supplement rather than replace expert verification in high-stakes mathematical work.
 
-You're not merely explaining a PLM prediction.
+## 16. Deadline schedule
 
-You're asking whether **reading the model's internal computation reveals experimentally validated functional constraint**.
+### August 30
 
-That is almost exactly the workshop's stated premise. ([Interpretability for Discovery][1])
+- run the 100-trace smoke configuration end to end;
+- inspect label counts, partition balance, exclusions, and activation shapes;
+- start the full sharded extraction and persist artifacts to Drive.
 
----
+### August 31
 
-# Your paper has a good outcome even if the result is negative
+- finish extraction;
+- run probes, controls, grouped bootstrap, and transfer;
+- freeze the selected layer and predictive results;
+- begin learned-direction interventions.
 
-This is one reason I like this project under a four-day deadline.
+### September 1
 
-Suppose you find:
+- finish random causal controls and freeze all experiments;
+- create final figures and result tables;
+- write Methods and Results first, using only claims licensed by the decision table.
 
-> A <1% latent circuit faithfully reproduces ESM2's zero-shot score, but its highlighted residues correlate weakly with actual experimental intolerance.
+### September 2
 
-That's still interesting.
+- finish Introduction, Limitations, and responsible-use statement;
+- compile the five-page double-blind PDF;
+- search PDF, metadata, repository links, GitHub usernames, Hugging Face usernames, author names,
+  affiliations, and acknowledgments for identifying information;
+- upload early and verify the OpenReview PDF before the deadline.
 
-It says:
+Do not plan new experiments on September 2. Optional analyses are dropped before required controls.
 
-> **Mechanistic fidelity to the model is not the same as scientific validity.**
+## 17. Artifact-to-claim map
 
-That would fit the workshop's explicit request for analyses of **misleading interpretations, failed validation, and limitations of interpretability for reliable discovery**. ([Interpretability for Discovery][2])
+| Claim/check | Artifact |
+| --- | --- |
+| Layer-wise decoding and first-error localization | `probes/layer_metrics.csv` |
+| Trace-level uncertainty | `probes/test_group_bootstrap.csv` |
+| Position, lexical, and shuffled-label controls | `probes/controls.csv` |
+| Held-out trajectories and subgroup diagnostics | `probes/test_predictions.csv` |
+| Cross-domain generality | `probes/domain_transfer.csv` |
+| PCA accessibility | `probes/pca_subspace.csv` |
+| Native verdict competence | `interventions/behavioral_verdict.json` |
+| Individual paired causal effects | `interventions/individual.csv` |
+| Dose response and random controls | `interventions/summary.csv` |
+| Exclusion accounting | `activation_shards/shard_*.json` |
 
-So you have two possible publishable narratives:
-
-**Positive result:** sparse causal circuits reveal experimentally constrained motifs.
-
-**Negative result:** sparse causal circuits explain the model extremely well but do not reliably reveal biological constraint.
-
-Both fit.
-
-That substantially lowers project risk.
-
----
-
-# One complication you need to be aware of
-
-There is already a lot of 2025–26 work around interpretable PLMs.
-
-For example, InterPLM finds thousands of biological SAE features in ESM2 and demonstrates annotation discovery/steering. ([DOI][12]) Adams et al. similarly explicitly frame SAE analysis as moving from mechanistic interpretability toward “mechanistic biology.” ([PubMed Central (PMC)][13])
-
-More importantly, a **2026 PLM-SAE preprint already studies variant-effect prediction and improves zero-shot VEP through sparse feature steering**. ([Sciety][14])
-
-And a recent **ProGenMech** paper traces zero-shot fitness circuits in the autoregressive ProGen3 model. ([arXiv][15])
-
-So do **not** frame your claim as:
-
-> “We are the first to interpret mutation prediction using sparse features.”
-
-That would be vulnerable.
-
-Frame it much more specifically:
-
-> **We causally trace the native masked-marginal variant-effect computation of a masked protein language model and test whether the recovered mechanism itself predicts independently measured functional constraint.**
-
-That is substantially more defensible.
-
----
-
-# My second-choice idea: mechanistic epistasis
-
-This one may ultimately be more exciting scientifically, but it is riskier for this deadline.
-
-### **Do shared protein-language-model circuits predict epistasis?**
-
-Hypothesis:
-
-> Two mutations produce strong experimental epistasis when they perturb overlapping or causally coupled PLM circuit features.
-
-For mutations \(a,b\), obtain latent perturbation vectors:
-
-$$
-\Delta z_a,\quad\Delta z_b.
-$$
-
-Then calculate measures like:
-
-$$
-\text{overlap}(a,b)
-=
-\cos(\Delta z_a,\Delta z_b)
-$$
-
-or overlap of top circuit nodes.
-
-Compare that with experimental epistasis:
-
-$$
-\epsilon_{ab}
-=
-f_{ab}-f_a-f_b+f_{WT}
-$$
-
-with whatever transformation is appropriate for that DMS.
-
-This could lead to a beautiful conclusion:
-
-> **PLM internal circuits organize experimentally measurable genetic interactions.**
-
-That is very strongly aligned with “interpretability for discovery.”
-
-But there are two problems.
-
-First, there is already substantial work showing that PLMs encode structural/functional epistasis. ([BioRxiv][16]) There is also a very recent benchmark arguing that zero-shot methods perform poorly on strongly epistatic ProteinGym variants. ([GitHub][17]) And higher-order PLM interactions have been studied using Fourier approaches. ([arXiv][18])
-
-Your **circuit-level explanation** would still be novel, but the positioning becomes considerably harder.
-
-Second, estimating experimental epistasis correctly can become messy because DMS measurements and nonlinear experimental scales matter.
-
-With four days, I'd rank it:
-
-**scientific upside: 9.5/10**
-**workshop fit: 10/10**
-**four-day execution risk: 8/10**
-
-I'd save this as the follow-on full paper unless your lab already has an epistasis pipeline working.
-
----
-
-# Third-choice idea: use interpretability to predict model failure
-
-This is probably the safest experiment.
-
-### **Circuit Instability Predicts When Zero-Shot Protein Fitness Predictions Fail**
-
-Ask whether unreliable ESM2 mutation predictions have:
-
-* more diffuse attribution,
-* higher circuit entropy,
-* lower CLT reconstruction fidelity,
-* disagreement between layers,
-* unstable circuits under small sequence perturbations.
-
-For each mutation define something like:
-
-$$
-H(m)
-=
--\sum_j p_j(m)\log p_j(m)
-$$
-
-where \(p_j\) is normalized latent attribution.
-
-Then test whether high \(H(m)\) predicts high absolute DMS error.
-
-The story would be:
-
-> **Interpretability isn't only useful for explaining predictions; the structure of the explanation can tell us when the model should not be trusted.**
-
-This fits the workshop's failure-case/evaluation category very well. ([Interpretability for Discovery][1])
-
-It's also much cheaper than trying to discover biological mechanisms across many proteins.
-
-Novelty is probably lower than idea #1, but execution risk is lower.
-
----
-
-# Fourth idea: cross-protein transfer of circuits
-
-This is probably the most “discovery workshop” idea but I would not start it now.
-
-### **Are functional circuits conserved across protein homologs?**
-
-Extract a circuit in one protein/family and ask whether the same latent pathway:
-
-* appears in homologs,
-* localizes to equivalent motifs,
-* predicts mutation-sensitive positions,
-* survives sequence divergence.
-
-A result like
-
-> “the same causal circuit is reused across evolutionarily distant enzymes”
-
-would be excellent.
-
-But gathering homologs, alignments, equivalent residue positions, annotations and suitable DMS assays could eat the entire submission window.
-
-Save it unless you already have those datasets.
-
----
-
-# Ranking the projects for this deadline
-
-| Idea                                      | Workshop fit | Novelty | Colab feasibility | Deadline risk | Recommendation              |
-| ----------------------------------------- | -----------: | ------: | ----------------: | ------------: | --------------------------- |
-| **Causal circuits of ESM2 zero-shot VEP** |           10 |     8–9 |                 9 |             4 | **Do this**                 |
-| Mechanistic explanation of epistasis      |           10 |       9 |                 7 |             8 | Strong future/full paper    |
-| Circuit features predict VEP failures     |            9 |     7–8 |                10 |             3 | **Excellent backup**        |
-| Cross-homolog circuit transfer            |           10 |       9 |                 6 |             9 | Too risky now               |
-| “SAE features correlate with biology”     |            7 |       3 |                10 |             2 | **Don't submit this alone** |
-| Train a new SAE/CLT                       |            8 |  varies |                 2 |            10 | **Absolutely don't do now** |
-
----
-
-# What I would actually execute
-
-I'd reduce everything to **three research questions**.
-
-### RQ1 — Is zero-shot mutation scoring mechanistically sparse?
-
-> Can a small subset of interpretable latent-token features recover ESM2's masked-marginal mutation scores?
-
-Plot: recovery versus circuit size.
-
-### RQ2 — Are those features causally important?
-
-> Does ablating them damage zero-shot behavior significantly more than matched random ablations?
-
-Plot: top-circuit vs random ablation.
-
-### RQ3 — Does the mechanism correspond to experimental biology?
-
-> Do residues carrying high circuit attribution have stronger experimentally measured DMS effects?
-
-Plot: circuit importance versus experimental intolerance + one biological case study.
-
-That is enough for a workshop paper.
-
-Do **not** add generation, protein design, multiple architectures, ten interpretability methods or 50 datasets.
-
----
-
-# Model/data choice
-
-I would use:
-
-**Primary model:** ESM2-8M + released ProtoMech CLT.
-
-Why: tiny, cheap, released checkpoints, and the repository explicitly supports Colab. ([GitHub][9])
-
-**Optional robustness:** ESM2-35M only after everything else works.
-
-**Primary dataset:** one well-characterized ProteinGym single-mutant DMS.
-
-**Secondary dataset:** one more protein with a different type of function.
-
-ProteinGym is perfect here because it already provides standardized experimental data and structures. ([PubMed Central (PMC)][19])
-
-You can legitimately write:
-
-> “DMS measurements were withheld during circuit discovery and used only as experimental validation.”
-
-That's a particularly clean methodological choice.
-
----
-
-# Baselines I would require
-
-Don't let the evaluation balloon. Four baselines are enough:
-
-1. **Full ESM2 masked-marginal score**
-2. **Random matched-size latent circuit**
-3. **Activation magnitude only**
-4. **Gradient magnitude only**
-
-Then show your activation×gradient/circuit-selection method.
-
-If easy, add entropy/conservation.
-
-Don't spend a day reproducing EVE, TranceptEVE, AlphaMissense, etc. Your paper is about the **mechanism of ESM**, not winning ProteinGym.
-
----
-
-# Minimum successful result
-
-You don't need SOTA performance.
-
-A workshop-quality result could simply look like:
-
-> “Across two DMS assays, 0.5–2% of CLT latents recover 70–90% of ESM2's zero-shot ranking. Top-circuit ablation produces a 4× larger performance drop than random ablation. Residue-level circuit attribution is significantly enriched at experimentally mutation-intolerant sites.”
-
-That's a clean paper.
-
-Even:
-
-> “Sparse circuits recover 85% of ESM2 behavior but show no stronger correspondence to DMS constraint than activation magnitude”
-
-could become a strong negative-result workshop submission.
-
----
-
-# Your figure plan
-
-For five pages I'd aim for **three figures**, maximum four.
-
-### Figure 1
-
-**Method diagram**
-
-Sequence → masked residue → ESM2 → sparse cross-layer circuit → mutant/WT logit difference → DMS validation.
-
-### Figure 2
-
-**Mechanistic sparsity**
-
-Performance-recovery curve.
-
-Top circuit vs random circuit.
-
-### Figure 3
-
-**Scientific validation**
-
-Residue circuit attribution vs DMS intolerance, plus one sequence/structure visualization of the strongest motifs.
-
-Optional small panel:
-
-top-latent ablation versus random ablation.
-
-That's enough.
-
----
-
-# Suggested title variants
-
-I'd avoid making the title excessively grand.
-
-My favorites:
-
-**Causal Circuits Underlying Zero-Shot Variant Effect Prediction in Protein Language Models**
-
-or
-
-**From Mutation Scores to Mechanisms: Tracing Zero-Shot Variant Effects in ESM-2**
-
-or, more discovery-focused:
-
-**Reading Functional Constraint from Protein Language Model Circuits**
-
-The first is safest and clearest.
-
----
-
-# A possible abstract-level claim
-
-The paper should aim to establish something like:
-
-> Protein language models can predict mutation effects zero-shot, but the internal computation supporting these predictions is poorly understood. We trace sparse causal circuits underlying masked-marginal variant scoring in ESM-2 using pretrained cross-layer sparse representations. We find that a small fraction of latent-token components recovers much of the original zero-shot ranking, while targeted ablations cause substantially larger degradation than random controls. Importantly, circuit attribution is enriched at experimentally mutation-sensitive residues in deep mutational scanning data, connecting internal model mechanisms to independently measured functional constraints.
-
-Obviously the quantitative statements only stay if the results support them.
-
----
-
-# A very practical schedule
-
-I would operate under an internal rule: **freeze experiments by the end of Aug. 31**.
-
-### Aug. 29
-
-Get one end-to-end pipeline running.
-
-* download one ProteinGym assay
-* load ESM2-8M
-* reproduce zero-shot masked-marginal scores
-* compute Spearman against DMS
-* load ProtoMech/Nainani interpretability weights
-* verify you can access latent activations
-
-If this isn't working by tonight, switch immediately to the simpler SAE implementation instead of debugging architecture code for a day.
-
-### Aug. 30
-
-Implement circuit attribution and intervention.
-
-Get:
-
-* top-k latent ranking
-* recovery curve
-* random baseline
-* necessity ablation.
-
-This is the make-or-break day.
-
-### Aug. 31
-
-Biological validation + replication.
-
-* residue-level DMS constraint
-* functional-site enrichment
-* second protein if time permits
-* bootstrap/random controls.
-
-**Freeze results.**
-
-### Sept. 1
-
-Write Results and Methods first.
-
-Generate camera-ready figures.
-
-Put secondary analyses into appendix rather than expanding the paper.
-
-### Sept. 2
-
-Intro, related work, discussion, limitations, proofreading.
-
-The CFP requires a **responsible-use statement**, and missing it is explicitly grounds for desk rejection. ([Interpretability for Discovery][2])
-
-Also make sure the manuscript, repository, Hugging Face names, paths, acknowledgements, etc. are fully anonymized because review is double-blind. ([Interpretability for Discovery][2])
-
-Treat Sept. 2 as your actual cutoff and don't use AoE as planned writing time.
-
----
-
-# What I would not do
-
-For this deadline I would explicitly rule out:
-
-* training a new pLM;
-* training a new CLT;
-* training a new SAE;
-* ESM2-650M-scale experiments unless absolutely necessary;
-* a 100-assay ProteinGym benchmark;
-* wet-lab validation;
-* full protein-design experiments;
-* trying to outperform current ProteinGym SOTA;
-* a generic comparison of SAE versus neuron interpretability;
-* an “LLM automatically labels protein features” paper.
-
-Those are all ways to end up with 40% of five experiments instead of one finished result.
-
----
-
-## One more reason I like the first idea
-
-ProtoMech's own stated limitations include reliance on **manual interpretation and existing biological annotations**, which restricts biological discovery. ([ResearchGate][6])
-
-Your paper can sidestep that weakness by defining biological relevance quantitatively:
-
-> **Does the circuit predict an independent experimental measurement?**
-
-You don't need to manually decide that latent 1,827 “looks like” a domain. The DMS gives you a falsifiable test.
-
-That is a better fit for **Interpretability for Discovery** than another feature-visualization paper.
-
-### My recommendation
-
-If I were allocating your next four days, I would commit to:
-
-**“Causal Circuits Underlying Zero-Shot Variant Effect Prediction in ESM-2”**
-
-using **ESM2-8M + an already-trained ProtoMech CLT**, **one primary ProteinGym DMS**, **top-k sufficiency/necessity experiments**, and **DMS mutation intolerance as independent biological validation**.
-
-Keep **“circuit structure predicts model failure”** as your fallback. If the biological discovery signal turns out weak, don't throw the project away—pivot the paper into a rigorous failure-case result, which this CFP explicitly welcomes. ([Interpretability for Discovery][2])
-
-That gives you a project where almost every empirical outcome can be turned into a coherent five-page submission, which is exactly what you want under this deadline.
-
-[1]: https://interpretability4discovery.github.io/about.html "About: Interpretability for Discovery"
-[2]: https://interpretability4discovery.github.io/cfp.html "Call for Papers: Interpretability for Discovery"
-[3]: https://proceedings.neurips.cc/paper/2021/hash/f51338d736f95dd42427296047067694-Abstract.html "Language models enable zero-shot prediction of the effects of mutations on protein function"
-[4]: https://pubmed.ncbi.nlm.nih.gov/38106144/?utm_source=chatgpt.com "ProteinGym: Large-Scale Benchmarks for Protein Design and Fitness Prediction - PubMed"
-[5]: https://www.alphaxiv.org/ja/abs/2602.12026 "Protein Circuit Tracing via Cross-layer Transcoders | alphaXiv"
-[6]: https://www.researchgate.net/publication/400742139_Protein_Circuit_Tracing_via_Cross-layer_Transcoders?_tp=eyJjb250ZXh0Ijp7InBhZ2UiOiJzY2llbnRpZmljQ29udHJpYnV0aW9ucyIsInByZXZpb3VzUGFnZSI6bnVsbCwic3ViUGFnZSI6bnVsbH19&utm_source=chatgpt.com "(PDF) Protein Circuit Tracing via Cross-layer Transcoders"
-[7]: https://www.biorxiv.org/content/10.1101/2025.08.22.671739v1?utm_source=chatgpt.com "Mechanistic evidence that motif-gated domain recognition drives contact prediction in protein language models | bioRxiv"
-[8]: https://www.researchgate.net/publication/400742139_Protein_Circuit_Tracing_via_Cross-layer_Transcoders?utm_source=chatgpt.com "(PDF) Protein Circuit Tracing via Cross-layer Transcoders"
-[9]: https://github.com/amirgroup-codes/ProtoMech "GitHub - amirgroup-codes/ProtoMech: (ICML 2026) Official code repository for Protein Circuit Tracing via Cross-layer Transcoders · GitHub"
-[10]: https://www.alphaxiv.org/abs/2602.12026v1?utm_source=chatgpt.com "Protein Circuit Tracing via Cross-layer Transcoders | alphaXiv"
-[11]: https://github.com/NainaniJatinZ/plm_circuits?utm_source=chatgpt.com "GitHub - NainaniJatinZ/plm_circuits: SAE Circuit Discovery for Protein Language Models · GitHub"
-[12]: https://doi.org/10.1038/s41592-025-02836-7?utm_source=chatgpt.com "InterPLM: discovering interpretable features in protein language models via sparse autoencoders | Nature Methods"
-[13]: https://pmc.ncbi.nlm.nih.gov/articles/PMC11839115/?utm_source=chatgpt.com "From Mechanistic Interpretability to Mechanistic Biology: Training, Evaluating, and Interpreting Sparse Autoencoders on Protein Language Models - PMC"
-[14]: https://sciety.org/articles/activity/10.64898/2026.05.12.724472?utm_source=chatgpt.com "Improving Variant Effect Prediction by Steering Sparse Mechanistic Features in Protein Language Models | Sciety"
-[15]: https://arxiv.org/abs/2606.16044?utm_source=chatgpt.com "Circuit Tracing in Autoregressive Protein Language Models"
-[16]: https://www.biorxiv.org/content/10.1101/2025.09.14.676130v1?utm_source=chatgpt.com "Protein Language Models Capture Structural and Functional Epistasis in a Zero-Shot Setting | bioRxiv"
-[17]: https://github.com/kalininalab/epistasis_proteingym?utm_source=chatgpt.com "GitHub - kalininalab/epistasis_proteingym · GitHub"
-[18]: https://arxiv.org/abs/2405.06645?utm_source=chatgpt.com "On Recovering Higher-order Interactions from Protein Language Models"
-[19]: https://pmc.ncbi.nlm.nih.gov/articles/PMC10723403/?utm_source=chatgpt.com "ProteinGym: Large-Scale Benchmarks for Protein Design and Fitness Prediction - PMC"
+Record the Git commit, Colab GPU type, package versions, runtime duration, and all deviations from
+this protocol before writing the final Results section.
