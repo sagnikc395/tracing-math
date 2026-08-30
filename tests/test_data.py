@@ -49,3 +49,27 @@ def test_problem_duplicates_stay_in_the_same_partition() -> None:
     assignments = assign_partitions(traces, seed=42, train_fraction=0.6, validation_fraction=0.2)
     assert assignments["a"] == assignments["b"]
     assert set(assignments.values()).issubset({"train", "validation", "test"})
+
+
+def test_partitions_are_balanced_within_source_and_error_status() -> None:
+    traces = []
+    for index in range(20):
+        trace = make_trace(f"error-{index}", problem=f"Error problem {index}")
+        traces.append(trace)
+        correct = ProcessTrace(
+            **{
+                **trace.__dict__,
+                "trace_id": f"correct-{index}",
+                "problem": f"Correct problem {index}",
+                "label": -1,
+                "final_answer_correct": True,
+            }
+        )
+        traces.append(correct)
+    assignments = assign_partitions(traces, seed=42, train_fraction=0.6, validation_fraction=0.2)
+    for prefix in ("error", "correct"):
+        counts = [
+            sum(assignments[f"{prefix}-{index}"] == partition for index in range(20))
+            for partition in ("train", "validation", "test")
+        ]
+        assert counts == [12, 4, 4]

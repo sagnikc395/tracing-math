@@ -113,24 +113,36 @@ def assign_partitions(
     train_fraction: float,
     validation_fraction: float,
 ) -> dict[str, str]:
-    """Assign whole problem groups to deterministic, approximately stratified partitions."""
+    """Assign whole problem groups to deterministic source/error-stratified partitions."""
     grouped: dict[str, list[ProcessTrace]] = {}
     for trace in traces:
         grouped.setdefault(trace.problem_group, []).append(trace)
 
-    assignments: dict[str, str] = {}
+    strata: dict[tuple[str, str], list[tuple[str, list[ProcessTrace]]]] = {}
     for group_id, members in grouped.items():
         sources = "+".join(sorted({member.source for member in members}))
         status = "error" if any(member.has_error for member in members) else "correct"
-        digest = hashlib.sha256(f"{seed}:{sources}:{status}:{group_id}".encode()).digest()
-        draw = int.from_bytes(digest[:8], "big") / 2**64
-        if draw < train_fraction:
-            partition = "train"
-        elif draw < train_fraction + validation_fraction:
-            partition = "validation"
-        else:
-            partition = "test"
-        assignments.update({member.trace_id: partition for member in members})
+        strata.setdefault((sources, status), []).append((group_id, members))
+
+    assignments: dict[str, str] = {}
+    for (sources, status), groups in strata.items():
+        ordered = sorted(
+            groups,
+            key=lambda item: hashlib.sha256(
+                f"{seed}:{sources}:{status}:{item[0]}".encode()
+            ).digest(),
+        )
+        n_groups = len(ordered)
+        train_end = round(n_groups * train_fraction)
+        validation_end = train_end + round(n_groups * validation_fraction)
+        for index, (_, members) in enumerate(ordered):
+            if index < train_end:
+                partition = "train"
+            elif index < validation_end:
+                partition = "validation"
+            else:
+                partition = "test"
+            assignments.update({member.trace_id: partition for member in members})
     return assignments
 
 
