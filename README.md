@@ -50,6 +50,15 @@ one-dimensional.
 
 ## Colab quick start
 
+The easiest route is to use the all-in-one notebook:
+
+- [Open the complete experiment in Colab](https://colab.research.google.com/github/sagnikc395/tracing-mathematical-error-detection-in-language-models/blob/main/notebooks/colab_experiment.ipynb)
+
+It has a `RUN_MODE` switch for the cheap smoke test and the full preregistered run. See
+[`notebooks/README.md`](notebooks/README.md) for the workflow, persistent Drive layout, and output
+locations. The notebook supports token-authenticated cloning and can commit the final result package
+back into the repository's `artifacts/` subtree after the run.
+
 Select `Runtime → Change runtime type → T4 GPU`, clone or upload this repository, then run:
 
 ```bash
