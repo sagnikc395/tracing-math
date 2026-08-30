@@ -115,7 +115,7 @@ def summarize_interventions(frame: pd.DataFrame) -> pd.DataFrame:
             mean_verdict_score=("verdict_score", "mean"),
             mean_delta=("delta_verdict_score", "mean"),
             standard_error=(
-                "verdict_score",
+                "delta_verdict_score",
                 lambda values: values.std(ddof=1) / np.sqrt(len(values)),
             ),
             n=("verdict_score", "size"),

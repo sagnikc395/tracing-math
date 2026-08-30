@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from causal_circuits.analysis import ProbeResults, fit_layer_probes
+from causal_circuits.analysis import ProbeResults, binary_metrics, fit_layer_probes
 from causal_circuits.circuits import run_interventions, summarize_interventions
 from causal_circuits.config import ExperimentConfig
 from causal_circuits.data import (
@@ -183,6 +183,16 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
     output.mkdir(parents=True, exist_ok=True)
     results.to_csv(output / "individual.csv", index=False)
     summarize_interventions(results).to_csv(output / "summary.csv", index=False)
+    baseline = results[(results["direction_type"] == "learned") & (results["alpha"] == 0.0)]
+    baseline_metrics = binary_metrics(
+        baseline[config.probe.target].to_numpy(), baseline["verdict_score"].to_numpy()
+    )
+    baseline_metrics["zero_threshold_accuracy"] = float(
+        (
+            (baseline["verdict_score"].to_numpy() >= 0) == baseline[config.probe.target].to_numpy()
+        ).mean()
+    )
+    _atomic_write_text(output / "behavioral_verdict.json", json.dumps(baseline_metrics, indent=2))
     return results
 
 
