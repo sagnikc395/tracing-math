@@ -12,6 +12,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
+from tqdm.auto import tqdm
 
 from causal_circuits.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
 
@@ -113,17 +114,31 @@ def change_point_metrics(
     tolerances: tuple[int, ...] = (0, 1, 2),
 ) -> dict[str, float]:
     """ProcessBench exact first-error score induced by the first threshold crossing."""
+    expected_array, predicted_array = _change_point_outcomes(metadata, scores, threshold)
+    return _change_point_metrics_from_outcomes(expected_array, predicted_array, tolerances)
+
+
+def _change_point_outcomes(
+    metadata: pd.DataFrame, scores: np.ndarray, threshold: float
+) -> tuple[np.ndarray, np.ndarray]:
     frame = metadata[["trace_id", "step_index", "first_error"]].copy()
     frame["score"] = np.asarray(scores, dtype=float)
     expected: list[int] = []
     predicted: list[int] = []
     for _, trace_rows in frame.groupby("trace_id", sort=False):
-        trace_rows = trace_rows.sort_values("step_index")
-        expected.append(int(trace_rows["first_error"].iloc[0]))
-        crossings = trace_rows.loc[trace_rows["score"] >= threshold, "step_index"]
-        predicted.append(-1 if crossings.empty else int(crossings.iloc[0]))
-    expected_array = np.asarray(expected)
-    predicted_array = np.asarray(predicted)
+        ordered = trace_rows.sort_values("step_index")
+        expected.append(int(ordered["first_error"].iloc[0]))
+        crossing = ordered["score"].to_numpy() >= threshold
+        first_crossing = int(ordered["step_index"].iloc[np.argmax(crossing)])
+        predicted.append(first_crossing if crossing.any() else -1)
+    return np.asarray(expected), np.asarray(predicted)
+
+
+def _change_point_metrics_from_outcomes(
+    expected_array: np.ndarray,
+    predicted_array: np.ndarray,
+    tolerances: tuple[int, ...],
+) -> dict[str, float]:
     error_mask = expected_array >= 0
     correct_mask = ~error_mask
     error_accuracy = _safe_mean(predicted_array[error_mask] == expected_array[error_mask])
@@ -168,13 +183,37 @@ def choose_threshold(
     threshold_points: int = 181,
 ) -> float:
     candidates = np.linspace(threshold_min, threshold_max, threshold_points)
-    ranked = [
-        (
-            change_point_metrics(metadata, scores, float(threshold))["process_f1"],
-            -abs(float(threshold) - 0.5),
-            float(threshold),
+    frame = metadata[["trace_id", "step_index", "first_error"]].copy()
+    frame["score"] = np.asarray(scores, dtype=float)
+    expected: list[int] = []
+    predictions: list[np.ndarray] = []
+    for _, trace_rows in frame.groupby("trace_id", sort=False):
+        ordered = trace_rows.sort_values("step_index")
+        expected.append(int(ordered["first_error"].iloc[0]))
+        crossings = ordered["score"].to_numpy()[:, None] >= candidates[None, :]
+        any_crossing = crossings.any(axis=0)
+        first_crossing = np.argmax(crossings, axis=0)
+        predictions.append(
+            np.where(any_crossing, ordered["step_index"].to_numpy()[first_crossing], -1)
         )
-        for threshold in candidates
+    expected_array = np.asarray(expected)
+    prediction_matrix = np.asarray(predictions)
+    error_mask = expected_array >= 0
+    correct_mask = ~error_mask
+    error_accuracy = np.mean(
+        prediction_matrix[error_mask] == expected_array[error_mask, None], axis=0
+    )
+    correct_accuracy = np.mean(prediction_matrix[correct_mask] == -1, axis=0)
+    denominator = error_accuracy + correct_accuracy
+    process_f1 = np.divide(
+        2 * error_accuracy * correct_accuracy,
+        denominator,
+        out=np.zeros_like(denominator),
+        where=denominator > 0,
+    )
+    ranked = [
+        (float(score), -abs(float(threshold) - 0.5), float(threshold))
+        for threshold, score in zip(candidates, process_f1, strict=True)
     ]
     return max(ranked)[2]
 
@@ -218,7 +257,7 @@ def fit_layer_probes(
     prediction_rows: list[pd.DataFrame] = []
     validation_prediction_rows: list[pd.DataFrame] = []
 
-    for layer in range(n_layers):
+    for layer in tqdm(range(n_layers), desc="primary probe layers"):
         x = np.asarray(activations[:, layer, :], dtype=np.float32)
         best_c, validation_scores = _select_c(
             x[masks["train"]],
@@ -530,7 +569,10 @@ def _fit_family_layers(
     if any(len(np.unique(labels[mask])) < 2 for mask in masks.values()):
         return pd.DataFrame(), pd.DataFrame()
     metric_rows = []
-    for layer in range(activations.shape[1]):
+    for layer in tqdm(
+        range(activations.shape[1]),
+        desc=f"{family.name} / {target} layers",
+    ):
         hidden = np.asarray(activations[:, layer, :], dtype=np.float32)
         best_c, best_ratio, validation_scores = _select_family_hyperparameters(
             hidden[masks["train"]],
@@ -713,36 +755,35 @@ def group_bootstrap_metrics(
     analysis_config = analysis_config or AnalysisConfig()
     if samples < 1:
         return pd.DataFrame()
-    frame = metadata[["trace_id", "step_index", "first_error"]].copy()
-    frame["label"] = np.asarray(labels, dtype=int)
-    frame["score"] = np.asarray(scores, dtype=float)
-    trace_ids = frame["trace_id"].unique()
-    trace_groups = {
-        trace_id: group.copy() for trace_id, group in frame.groupby("trace_id", sort=False)
-    }
+    labels = np.asarray(labels, dtype=int)
+    scores = np.asarray(scores, dtype=float)
+    if len(metadata) != len(labels) or labels.shape != scores.shape:
+        raise ValueError("metadata, labels, and scores must have equal lengths")
+    trace_indices = [
+        group.to_numpy(dtype=int)
+        for _, group in pd.Series(np.arange(len(metadata))).groupby(
+            metadata["trace_id"].to_numpy(), sort=False
+        )
+    ]
+    expected, predicted = _change_point_outcomes(metadata, scores, threshold)
+    n_traces = len(trace_indices)
     rng = np.random.default_rng(seed)
     rows = []
     for sample_index in range(samples):
-        draws = rng.choice(trace_ids, size=len(trace_ids), replace=True)
-        pieces = []
-        for draw_index, trace_id in enumerate(draws):
-            piece = trace_groups[trace_id].copy()
-            piece["trace_id"] = f"bootstrap-{draw_index}"
-            pieces.append(piece)
-        sampled = pd.concat(pieces, ignore_index=True)
+        draws = rng.choice(n_traces, size=n_traces, replace=True)
+        sampled_indices = np.concatenate([trace_indices[index] for index in draws])
         row = {
             "sample": sample_index,
             **binary_metrics(
-                sampled["label"].to_numpy(),
-                sampled["score"].to_numpy(),
+                labels[sampled_indices],
+                scores[sampled_indices],
                 threshold=threshold,
                 calibration_bins=analysis_config.calibration_bins,
             ),
-            **change_point_metrics(
-                sampled,
-                sampled["score"].to_numpy(),
-                threshold,
-                tolerances=analysis_config.localization_tolerances,
+            **_change_point_metrics_from_outcomes(
+                expected[draws],
+                predicted[draws],
+                analysis_config.localization_tolerances,
             ),
         }
         rows.append(row)
