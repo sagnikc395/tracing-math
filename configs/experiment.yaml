@@ -10,7 +10,7 @@ data:
   dataset: Qwen/ProcessBench
   splits: [gsm8k, math, olympiadbench, omnimath]
   output_path: data/processed/processbench.jsonl
-  # Use 25 for a quick smoke run; null uses all 3,400 traces.
+  # Keep null for the preregistered run; set an integer only for a limited diagnostic run.
   max_examples_per_split: null
 
 extraction:

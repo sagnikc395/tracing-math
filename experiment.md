@@ -285,12 +285,12 @@ matched-trace empirical comparison against random orthogonal directions.
 
 Priority order:
 
-1. smoke test with 25 traces per source and a separate `artifacts/smoke` directory;
-2. full data download and sharded activation extraction;
-3. layer probes, required controls, bootstrap, and transfer matrix;
-4. causal verdict baseline and learned-direction dose response;
-5. random causal controls;
-6. PCA curve and any optional robustness checks.
+1. validate the configuration, environment, and downloaded data;
+2. run the full sharded activation extraction and inspect the first completed shard;
+3. fit layer probes, required controls, bootstrap, and transfer matrix;
+4. run the causal verdict baseline and learned-direction dose response;
+5. run random causal controls;
+6. generate the PCA curve and any optional robustness checks.
 
 The model is loaded in FP16, processes one trace at a time, and immediately moves selected
 boundary states to CPU as FP16 arrays. Activation shards are written every 100 traces. Completed
@@ -359,9 +359,9 @@ scores supplement rather than replace expert verification in high-stakes mathema
 
 ### August 30
 
-- run the 100-trace smoke configuration end to end;
-- inspect label counts, partition balance, exclusions, and activation shapes;
-- start the full sharded extraction and persist artifacts to Drive.
+- validate the full notebook configuration, environment, label counts, and partition balance;
+- start the resumable sharded extraction and persist artifacts to Drive;
+- inspect exclusions and activation shapes after the first shard completes.
 
 ### August 31
 

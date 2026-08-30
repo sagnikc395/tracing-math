@@ -1,20 +1,22 @@
 # Colab notebooks
 
-[`colab_experiment.ipynb`](colab_experiment.ipynb) is the single, reproducible front end to the
+[`experiment.ipynb`](experiment.ipynb) is the single, reproducible front end to the
 experiment code in `src/`. It does not reimplement the analysis, so command-line and notebook runs
 produce the same artifacts.
 
 ## Workflow
 
-1. Open the notebook on a T4 runtime and leave `RUN_MODE = "smoke"`. This runs the unit tests and
-   uses 25 traces per ProcessBench source. The causal stage is off by default in smoke mode but can
-   be enabled with `RUN_INTERVENTIONS = True`.
-2. After the smoke run succeeds, change the same notebook to `RUN_MODE = "full"` and restart from
-   the configuration cell. Full mode mounts Google Drive, restores all preregistered sample sizes,
-   enables the causal stage, and summarizes the paper-facing metrics and figures. Probe fitting
-   also produces exploratory L1/elastic-net comparisons, calibration, localization tolerance,
-   trajectory, subgroup, and paired causal-effect tables from the same cached activations.
-3. After the completion checklist passes, run the final publishing cell to copy the result package
+1. Open the notebook on a T4 runtime and run the setup cells. The notebook uses the full
+   preregistered configuration from `configs/experiment.yaml`, mounts Google Drive, and enables all
+   experiment stages by default.
+2. Review the configuration cell before starting extraction. Storage paths and stages are direct
+   notebook variables. `CONFIG_OVERRIDES` accepts nested YAML overrides for an intentional
+   alternative run; keep it empty for the preregistered experiment and use a distinct
+   `ARTIFACT_NAME` when changing identity-sensitive settings.
+3. Run the remaining cells in order. Probe fitting produces the confirmatory results plus
+   exploratory L1/elastic-net comparisons, calibration, localization tolerance, trajectory,
+   subgroup, and paired causal-effect tables from the same cached activations.
+4. After the completion checklist passes, run the final publishing cell to copy the result package
    into the repository's `artifacts/` subtree, commit it, and push it to GitHub.
 
 Use **Runtime → Change runtime type → T4 GPU** before running the notebook. A fresh runtime must
@@ -22,13 +24,34 @@ rerun the setup cell, but completed activation shards in Drive are detected and 
 
 ## Outputs
 
-Smoke mode writes to `artifacts/smoke`. By default, full mode writes to
-`MyDrive/math-error-tracing/artifacts/qwen2.5-math-1.5b` and keeps its ProcessBench JSONL beside
-that artifact directory. Change `DRIVE_PROJECT_DIR` in the notebook if desired.
+By default, the notebook writes artifacts to
+`MyDrive/math-error-tracing/artifacts/qwen2.5-math-1.5b` and keeps its ProcessBench JSONL under
+`MyDrive/math-error-tracing/data/`. Change `DRIVE_PROJECT_DIR`, `DATA_FILENAME`, or
+`ARTIFACT_NAME` in the notebook if desired.
 
-Do not point smoke and full runs at the same artifact directory. Extraction identity checks reject
-incompatible model/data settings, but separate directories also make accidental result mixing
-obvious.
+Do not point configurations with different model, dataset sample, dtype, or context length at the
+same artifact directory. Extraction identity checks reject incompatible cached shards, and a
+distinct artifact name keeps alternative result packages separate.
+
+## Configuration
+
+`CONFIG_OVERRIDES = {}` preserves the full settings in `configs/experiment.yaml`. Overrides merge
+recursively. For example, a limited diagnostic run can use:
+
+```python
+DATA_FILENAME = "processbench-25-per-source.jsonl"
+ARTIFACT_NAME = "diagnostic-25-per-source"
+CONFIG_OVERRIDES = {
+    "data": {"max_examples_per_split": 25},
+    "probe": {"bootstrap_samples": 0},
+    "analysis": {"exploratory_bootstrap_samples": 0},
+    "intervention": {"examples_per_class": 8, "random_directions": 2},
+}
+```
+
+The stage flags `RUN_DOWNLOAD`, `RUN_EXTRACTION`, `RUN_PROBES_AND_CONTROLS`,
+`RUN_INTERVENTIONS`, and `RUN_PLOTS` are all `True` by default and can be disabled independently
+when resuming or splitting a run across sessions.
 
 ## GitHub token
 

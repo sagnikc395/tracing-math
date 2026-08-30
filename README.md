@@ -1,68 +1,99 @@
 # Tracing mathematical error detection in language models
 
-This repository tests a focused mechanistic question:
+This project asks a focused mechanistic question:
 
 > When a mathematical solution first becomes invalid, does a small math language model
 > internally register that change, and does the representation causally affect its verdict?
 
-The target is a five-page submission to the NeurIPS 2026
+The intended output is a five-page submission to the NeurIPS 2026
 [Interpretability for Discovery](https://interpretability4discovery.github.io/) workshop. The
-deadline is **September 2, 2026 at 11:59:59 PM AoE**. The experiment is sized for one Google
-Colab T4 and uses existing model weights and human annotations; it does not fine-tune the LLM
-or generate a new dataset.
+submission deadline is **September 2, 2026 at 11:59:59 PM AoE**.
 
-## Study in one minute
+## Current status — August 30, 2026
+
+**Stage: implementation complete; experimental results pending.**
+
+The research question and analysis plan are preregistered, the ProcessBench data has been
+downloaded locally, and the command-line and Colab pipelines are implemented. The unit test suite
+currently passes (15 tests), and Ruff reports no lint errors. However, no activation shards,
+probe results, causal-intervention results, or paper-ready figures are present in the repository
+yet. The paper directory still contains the unedited NeurIPS template.
+
+| Milestone | Status |
+| --- | --- |
+| Freeze hypotheses, splits, metrics, controls, and claim criteria | Complete |
+| Implement data, activation, probe, intervention, and plotting stages | Complete |
+| Provide a resumable Colab workflow | Complete |
+| Download all 3,400 ProcessBench traces locally | Complete |
+| Run the full end-to-end experiment on a T4 | Next |
+| Freeze the completed experiment and controls | Pending |
+| Interpret results and select the supported claim | Pending |
+| Replace the paper template with the five-page manuscript | Pending |
+
+Accordingly, this README describes the **planned and implemented experiment**, not empirical
+findings. No mechanistic claim should be inferred until the held-out results and controls have
+been generated.
+
+## Planned study
 
 - **Data:** the official 3,400-example
-  [Qwen/ProcessBench](https://huggingface.co/datasets/Qwen/ProcessBench), with human labels for
-  the zero-indexed first erroneous step (`-1` means that every step is correct).
+  [Qwen/ProcessBench](https://huggingface.co/datasets/Qwen/ProcessBench), with a zero-indexed human
+  label for the first erroneous step (`-1` means that every step is correct).
 - **Model:** `Qwen/Qwen2.5-Math-1.5B-Instruct` in FP16.
-- **Representation:** residual-stream hidden state at the end marker for every reasoning step.
-- **Predictive test:** a regularized logistic probe at each hidden-state index.
-- **Change-point test:** convert probe scores into the first threshold-crossing step and compare
-  that step with the human annotation.
-- **Generality test:** train the direction on one ProcessBench source and evaluate it on each
-  other source.
+- **Representation:** residual-stream hidden states at the end marker of each reasoning step.
+- **Predictive test:** a class-balanced L2 logistic probe at every hidden-state index.
+- **Localization test:** the first validation-selected threshold crossing, compared with the
+  human first-error annotation.
+- **Generality test:** train the direction on one ProcessBench source and evaluate it on the other
+  sources.
 - **Causal test:** add or subtract the held-out probe direction and measure the change in the
-  model's `INCORRECT` versus `CORRECT` answer score.
+  model's `INCORRECT` versus `CORRECT` verdict score.
 - **Controls:** problem-grouped splits, validation-only selection, position, current-step TF-IDF,
   shuffled labels, and matched random orthogonal intervention directions.
-- **Exploratory breadth:** compare L2, L1, and elastic-net linear probes and measure calibration,
-  near-miss localization, detection lead/lag, threshold sensitivity, error-aligned trajectories,
-  subgroup robustness, and paired causal-effect uncertainty.
+- **Exploratory analyses:** L1 and elastic-net probes, calibration, near-miss localization,
+  detection lead/lag, threshold sensitivity, error-aligned trajectories, subgroup robustness,
+  and paired causal-effect uncertainty.
 
-The main claim must be conditional on the results. Decodability alone is not called a mechanism.
-The causal claim is retained only if a signed dose response beats matched random directions on
-held-out examples.
-
-## Why this version is tighter than the original idea
-
-The primary outcome is not merely layer-wise AUROC. It is whether a probe trained on
-`invalid_so_far` produces the right **first threshold crossing**. That directly tests “when does
-the model know?” and prevents a high score on later, obviously corrupted steps from hiding poor
-localization at the actual error.
+The primary outcome is not simply layer-wise AUROC. It is whether a probe trained on
+`invalid_so_far` crosses its threshold at the annotated error step. This tests *when* the model
+detects an error and prevents strong performance on later, obviously corrupted steps from hiding
+poor localization.
 
 All steps from the same normalized problem remain in one partition. Layers, regularization, and
-the crossing threshold are selected on validation data only. The test set is opened once for
-reported metrics and interventions.
+the crossing threshold are selected on validation data only. The test set is reserved for final
+metrics and interventions.
 
-The PCA experiment is deliberately described as a **top-variance subspace accessibility** test,
-not as intrinsic dimensionality. A binary linear probe always compresses its decision to one
-scalar, so probe performance by itself cannot establish that the underlying computation is
-one-dimensional.
+## Immediate next steps
 
-## Colab quick start
+1. Open the full Colab workflow, confirm the configuration, and inspect the downloaded data and
+   partition balance.
+2. Start the resumable activation extraction and persist it to Google Drive; inspect exclusions
+   and activation shapes after the first shard completes.
+3. Fit probes and controls, freeze the validation-selected layer, and run causal
+   interventions.
+4. Generate the result package and write only the conclusion supported by the decision criteria
+   in [experiment.md](experiment.md).
 
-The easiest route is to use the all-in-one notebook:
+The detailed day-by-day submission schedule is in
+[Section 16 of experiment.md](experiment.md#16-deadline-schedule).
 
-- [Open the complete experiment in Colab](https://colab.research.google.com/github/sagnikc395/tracing-mathematical-error-detection-in-language-models/blob/main/notebooks/colab_experiment.ipynb)
+## Run the experiment
 
-It has a `RUN_MODE` switch for the cheap smoke test and the full preregistered run. See
-[`notebooks/README.md`](notebooks/README.md) for the workflow, persistent Drive layout, and output
-locations. The notebook supports token-authenticated cloning and can commit the final result package
-back into the repository's `artifacts/` subtree after the run.
+### Recommended: Colab
 
-Select `Runtime → Change runtime type → T4 GPU`, clone or upload this repository, then run:
+Use the all-in-one notebook:
+
+- [Open the experiment in Colab](https://colab.research.google.com/github/sagnikc395/tracing-mathematical-error-detection-in-language-models/blob/main/notebooks/experiment.ipynb)
+
+Select **Runtime → Change runtime type → T4 GPU** and run the notebook from the top. It uses the
+full preregistered configuration, Google Drive persistence, and all experiment stages by default.
+Storage, artifact naming, stage selection, and nested configuration overrides are editable in the
+configuration cells. See [notebooks/README.md](notebooks/README.md) for the available controls,
+resume behavior, output locations, and optional publishing workflow.
+
+### Command line
+
+Install the package, validate the configuration, and run each stage in order:
 
 ```bash
 pip install -e .
@@ -74,56 +105,88 @@ python -m causal_circuits --config configs/experiment.yaml run-interventions
 python -m causal_circuits --config configs/experiment.yaml plot
 ```
 
-Or run the full sequence:
+Or run the complete sequence:
 
 ```bash
 python -m causal_circuits --config configs/experiment.yaml run-all
 ```
 
-The global `--config` argument goes before the subcommand.
+The global `--config` argument must appear before the subcommand.
 
-### Run a cheap smoke test first
+### Notebook configuration
 
-Before the full run, copy the configuration and change:
+The notebook loads `configs/experiment.yaml` without changing its full-run settings when
+`CONFIG_OVERRIDES` is empty. To run a smaller diagnostic configuration, choose a distinct artifact
+name and provide only the values to change:
 
-```yaml
-data:
-  max_examples_per_split: 25
-
-extraction:
-  output_dir: artifacts/smoke
-
-probe:
-  bootstrap_samples: 0
-
-analysis:
-  exploratory_bootstrap_samples: 0
-
-intervention:
-  examples_per_class: 8
-  random_directions: 2
+```python
+DATA_FILENAME = "processbench-25-per-source.jsonl"
+ARTIFACT_NAME = "diagnostic-25-per-source"
+CONFIG_OVERRIDES = {
+    "data": {"max_examples_per_split": 25},
+    "probe": {"bootstrap_samples": 0},
+    "analysis": {"exploratory_bootstrap_samples": 0},
+    "intervention": {"examples_per_class": 8, "random_directions": 2},
+}
 ```
 
-Use a different output directory when changing the model, dataset sample, dtype, or context
-length. The harness fingerprints the data and model settings and refuses to mix incompatible
-activation shards.
+The harness fingerprints the data and model settings and refuses to mix incompatible activation
+shards. Do not reuse an output directory after changing the model, dataset sample, dtype, or
+context length.
 
-### Colab reliability notes
+### Runtime behavior
 
-- Extraction is sharded every 100 traces and safely resumes by skipping complete shards.
-- Each trace is forwarded once to collect every step boundary; causal masking guarantees that a
-  boundary state cannot see later steps.
-- Complete over-length traces are logged in each shard manifest and excluded. They are never
-  truncated because truncation would invalidate the human error location.
-- FP16 weights fit on a 16 GB T4 without 4-bit quantization. Quantization is avoided in the
-  primary run because it changes the activations being interpreted.
-- Save the repository or at least `data/processed` and `artifacts` to Google Drive before the
-  Colab runtime expires. Causal interventions are the slowest stage.
+- Extraction is sharded every 100 traces and resumes by skipping complete shards.
+- Each trace is forwarded once to collect every step boundary. Causal masking prevents a boundary
+  state from seeing later steps.
+- Over-length traces are logged and excluded rather than truncated, because truncation could
+  invalidate the annotated error location.
+- FP16 weights fit on a 16 GB T4. Quantization is excluded from the primary run because it changes
+  the activations under study.
+- Activation shards and final artifacts should be persisted to Google Drive before the Colab
+  runtime expires. Interventions are expected to be the slowest stage.
 
-## Artifact layout
+## Analysis and claim criteria
+
+For trace $i$, step $k$, and human first-error label $e_i$, the primary target is
+
+$$
+y_{ik}=\mathbb{1}[e_i \ge 0 \land k \ge e_i].
+$$
+
+Step-level AUROC and average precision are secondary metrics. The primary localization metric
+predicts the first step whose score exceeds a validation-selected threshold, or `-1` if no step
+crosses it. The report includes erroneous-trace accuracy, fully-correct-trace accuracy, and their
+harmonic mean.
+
+At the selected intervention layer $\ell$, the raw-coordinate probe direction is normalized to
+$v_\ell$ and the boundary state is changed by
+
+$$
+h' = h + \alpha\,\sigma_\ell v_\ell,
+$$
+
+where $\sigma_\ell$ is the training-set standard deviation of projections onto $v_\ell$. The
+behavioral outcome is the length-normalized log-probability difference between `INCORRECT` and
+`CORRECT`.
+
+The minimum result package has three parts:
+
+1. held-out layer-wise AUROC and first-error F1 with position and lexical controls;
+2. the four-by-four cross-domain transfer matrix;
+3. the held-out causal dose response with random-direction controls.
+
+Decodability alone is not evidence of a mechanism. A causal claim is retained only if the signed
+dose response beats matched random directions on held-out examples. A negative or mixed result is
+reported as such; the preregistered interpretation table is in
+[experiment.md](experiment.md#12-decision-table-for-the-paper-narrative).
+
+## Expected outputs
+
+The full run will create the following untracked result tree. These files are **expected outputs**;
+they have not yet been generated in the current repository state.
 
 ```text
-data/processed/processbench.jsonl
 artifacts/qwen2.5-math-1.5b/
 ├── extraction_identity.json
 ├── activation_shards/
@@ -160,49 +223,21 @@ artifacts/qwen2.5-math-1.5b/
     └── causal_dose_response.pdf
 ```
 
-## Labels and metrics
+Activation shards are resumable caches and are excluded from Git. The notebook publishing step
+can copy the final result tables, learned directions, intervention outputs, figures, extraction
+identity, and generated configuration into `artifacts/` after the run.
 
-For trace $i$, step $k$, and human first-error label $e_i$:
+## Repository guide
 
-\[
-y_{ik}=\mathbb{1}[e_i \ge 0 \land k \ge e_i].
-\]
-
-The primary probe predicts $y_{ik}$. Step-level AUROC and average precision are secondary
-metrics. The primary localization metric follows ProcessBench: predict the first step whose
-score exceeds a validation-selected threshold, or `-1` if no step crosses it. Report erroneous
-trace accuracy, fully-correct trace accuracy, and their harmonic mean.
-
-The confirmatory probe remains class-balanced L2 logistic regression. L1 and elastic-net probes
-are exploratory capacity-matched comparisons and cannot select the primary layer or causal
-direction. Expanded diagnostics report step classification and calibration, exact and ±1/±2-step
-localization, miss/false-alarm and early/late rates, score trajectories around the annotated
-onset, and source/generator/difficulty subgroups. All thresholds and hyperparameters remain
-validation-selected; test sweeps are descriptive and never feed selection.
-
-For the intervention at layer $\ell$, the learned raw-coordinate probe direction is normalized
-to $v_\ell$, and the boundary state is changed by
-
-\[
-h' = h + \alpha\,\sigma_\ell v_\ell,
-\]
-
-where $\sigma_\ell$ is the training-set standard deviation of projections onto $v_\ell$.
-This makes $\alpha$ comparable across layers. The behavioral outcome is the length-normalized
-log-probability difference between `INCORRECT` and `CORRECT`.
-
-## Minimum result package
-
-Freeze the submission around three panels:
-
-1. held-out layer-wise AUROC and first-error F1, with position and lexical controls;
-2. the four-by-four cross-domain transfer matrix;
-3. the held-out causal dose response with random-direction controls.
-
-A strong positive result is a localized, cross-domain signal with a monotonic causal effect. A
-useful negative result is a decodable signal that fails localization, transfer, or causal
-validation. The workshop explicitly welcomes careful failure analyses; do not overclaim a weak
-intervention.
+| Path | Purpose | Current state |
+| --- | --- | --- |
+| `configs/experiment.yaml` | Frozen full-run configuration | Ready |
+| `src/causal_circuits/` | Data, model, probe, intervention, and plotting code | Implemented |
+| `tests/` | Unit tests for configuration, data, analysis, and circuits | 15 passing |
+| `notebooks/experiment.ipynb` | Configurable full Colab workflow | Ready to run |
+| `experiment.md` | Preregistered hypotheses, decisions, claim table, and schedule | Complete |
+| `paper/` | NeurIPS style, checklist, and manuscript source | Template only |
+| `artifacts/` | Generated results and figures | Not generated |
 
 ## Local development
 
@@ -211,9 +246,6 @@ uv sync --extra dev
 uv run ruff check .
 uv run pytest
 ```
-
-See [experiment.md](experiment.md) for the preregistered hypotheses, analysis decisions,
-ablation priority, paper plan, and deadline schedule.
 
 ## Primary sources
 
