@@ -3,30 +3,34 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "causal-circuits-esm2"
+name = "tracing-mathematical-error-detection"
 version = "0.1.0"
-description = "Causal circuit analysis of ESM-2 zero-shot variant-effect predictions"
+description = "A Colab-sized causal tracing study of mathematical error detection in language models"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
-  "numpy>=2.0",
-  "pandas>=2.2",
-  "pyyaml>=6.0",
-  "scipy>=1.14",
+  "accelerate>=0.34,<2",
+  "datasets>=3.0,<5",
+  "matplotlib>=3.8,<4",
+  "numpy>=1.26,<3",
+  "pandas>=2.1,<3",
+  "pyyaml>=6.0,<7",
+  "safetensors>=0.4,<1",
+  "scikit-learn>=1.4,<2",
+  "scipy>=1.11,<2",
+  "torch>=2.2,<3",
+  "tqdm>=4.66,<5",
+  "transformers>=4.45,<5",
 ]
 
 [project.optional-dependencies]
-model = [
-  "torch>=2.4",
-  "transformers>=4.45",
-]
 dev = [
-  "pytest>=8.3",
-  "ruff>=0.8",
+  "pytest>=8.0,<9",
+  "ruff>=0.8,<1",
 ]
 
 [project.scripts]
-causal-circuits = "causal_circuits.cli:main"
+math-error-tracing = "causal_circuits.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/causal_circuits"]
@@ -37,7 +41,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

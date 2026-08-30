@@ -1,3 +1,3 @@
-"""Tools for tracing ESM-2 zero-shot variant-effect circuits."""
+"""Tools for tracing mathematical error detection in causal language models."""
 
 __version__ = "0.1.0"

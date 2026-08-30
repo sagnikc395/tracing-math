@@ -1,4 +1,4 @@
-"""Compatibility entry point; prefer the ``causal-circuits`` command."""
+"""Compatibility entry point; prefer the ``math-error-tracing`` command."""
 
 from causal_circuits.cli import main
 

@@ -1,4 +1,4 @@
-"""Typed experiment configuration and validation."""
+"""Typed configuration for the mathematical error-tracing experiments."""
 
 from __future__ import annotations
 
@@ -13,40 +13,43 @@ import yaml
 class ModelConfig:
     name: str
     device: str = "auto"
-    batch_size: int = 16
+    dtype: str = "float16"
+    max_length: int = 2048
 
 
 @dataclass(frozen=True)
 class DataConfig:
-    assay: str
-    path: Path
-    sequence_column: str = "mutated_sequence"
-    mutation_column: str = "mutation"
-    fitness_column: str = "DMS_score"
-    directionality: int = 1
-
-
-@dataclass(frozen=True)
-class ScoringConfig:
-    strategy: str
+    dataset: str
+    splits: tuple[str, ...]
     output_path: Path
+    max_examples_per_split: int | None = None
 
 
 @dataclass(frozen=True)
-class CircuitConfig:
-    backend: str
-    checkpoint: Path
-    attribution: str
-    top_k_fractions: tuple[float, ...]
-    random_trials: int
-
-
-@dataclass(frozen=True)
-class AnalysisConfig:
-    residue_aggregation: str
-    intolerant_fraction: float
-    bootstrap_samples: int
+class ExtractionConfig:
     output_dir: Path
+    save_every: int = 100
+
+
+@dataclass(frozen=True)
+class ProbeConfig:
+    target: str
+    train_fraction: float
+    validation_fraction: float
+    test_fraction: float
+    c_values: tuple[float, ...]
+    max_iter: int
+    bootstrap_samples: int
+    pca_dimensions: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class InterventionConfig:
+    alphas: tuple[float, ...]
+    examples_per_class: int
+    random_directions: int
+    correct_answer: str
+    incorrect_answer: str
 
 
 @dataclass(frozen=True)
@@ -54,12 +57,12 @@ class ExperimentConfig:
     seed: int
     model: ModelConfig
     data: DataConfig
-    scoring: ScoringConfig
-    circuit: CircuitConfig
-    analysis: AnalysisConfig
+    extraction: ExtractionConfig
+    probe: ProbeConfig
+    intervention: InterventionConfig
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> ExperimentConfig:
+    def from_yaml(cls, path: str | Path) -> "ExperimentConfig":
         config_path = Path(path)
         raw = yaml.safe_load(config_path.read_text())
         if not isinstance(raw, dict):
@@ -69,52 +72,79 @@ class ExperimentConfig:
         return config
 
     def validate(self) -> None:
-        if self.model.batch_size < 1:
-            raise ValueError("model.batch_size must be positive")
-        if self.data.directionality not in {-1, 1}:
-            raise ValueError("data.directionality must be either -1 or 1")
-        if self.scoring.strategy != "masked_marginal":
-            raise ValueError("Only masked_marginal scoring is currently supported")
-        if self.circuit.attribution != "activation_x_gradient":
-            raise ValueError("Only activation_x_gradient attribution is currently supported")
-        if not self.circuit.top_k_fractions:
-            raise ValueError("circuit.top_k_fractions cannot be empty")
-        if any(not 0 < fraction <= 1 for fraction in self.circuit.top_k_fractions):
-            raise ValueError("Every top-k fraction must lie in (0, 1]")
-        if not 0 < self.analysis.intolerant_fraction < 1:
-            raise ValueError("analysis.intolerant_fraction must lie in (0, 1)")
-
-
-def _require(raw: dict[str, Any], key: str) -> Any:
-    if key not in raw:
-        raise ValueError(f"Missing required configuration key: {key}")
-    return raw[key]
+        if self.model.dtype not in {"float16", "bfloat16", "float32"}:
+            raise ValueError("model.dtype must be float16, bfloat16, or float32")
+        if self.model.max_length < 128:
+            raise ValueError("model.max_length must be at least 128")
+        if not self.data.splits:
+            raise ValueError("data.splits cannot be empty")
+        if self.data.max_examples_per_split is not None and self.data.max_examples_per_split < 1:
+            raise ValueError("data.max_examples_per_split must be positive or null")
+        if self.extraction.save_every < 1:
+            raise ValueError("extraction.save_every must be positive")
+        if self.probe.target not in {"invalid_so_far", "error_onset"}:
+            raise ValueError("probe.target must be invalid_so_far or error_onset")
+        fractions = (
+            self.probe.train_fraction,
+            self.probe.validation_fraction,
+            self.probe.test_fraction,
+        )
+        if any(value <= 0 for value in fractions) or abs(sum(fractions) - 1.0) > 1e-8:
+            raise ValueError("probe split fractions must be positive and sum to one")
+        if not self.probe.c_values or any(value <= 0 for value in self.probe.c_values):
+            raise ValueError("probe.c_values must contain positive values")
+        if self.probe.max_iter < 1 or self.probe.bootstrap_samples < 0:
+            raise ValueError("probe iteration counts cannot be negative")
+        if any(value < 1 for value in self.probe.pca_dimensions):
+            raise ValueError("probe.pca_dimensions must be positive")
+        if not self.intervention.alphas or 0.0 not in self.intervention.alphas:
+            raise ValueError("intervention.alphas must include 0")
+        if self.intervention.examples_per_class < 1:
+            raise ValueError("intervention.examples_per_class must be positive")
+        if self.intervention.random_directions < 0:
+            raise ValueError("intervention.random_directions cannot be negative")
 
 
 def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
-    model = _require(raw, "model")
-    data = _require(raw, "data")
-    scoring = _require(raw, "scoring")
-    circuit = _require(raw, "circuit")
-    analysis = _require(raw, "analysis")
+    for key in ("model", "data", "extraction", "probe", "intervention"):
+        if key not in raw:
+            raise ValueError(f"Missing required configuration key: {key}")
+    data = raw["data"]
+    extraction = raw["extraction"]
+    probe = raw["probe"]
+    intervention = raw["intervention"]
     return ExperimentConfig(
         seed=int(raw.get("seed", 42)),
-        model=ModelConfig(**model),
-        data=DataConfig(**{**data, "path": Path(data["path"])}),
-        scoring=ScoringConfig(
-            strategy=scoring["strategy"], output_path=Path(scoring["output_path"])
+        model=ModelConfig(**raw["model"]),
+        data=DataConfig(
+            dataset=str(data["dataset"]),
+            splits=tuple(map(str, data["splits"])),
+            output_path=Path(data["output_path"]),
+            max_examples_per_split=(
+                None
+                if data.get("max_examples_per_split") is None
+                else int(data["max_examples_per_split"])
+            ),
         ),
-        circuit=CircuitConfig(
-            backend=circuit["backend"],
-            checkpoint=Path(circuit["checkpoint"]),
-            attribution=circuit["attribution"],
-            top_k_fractions=tuple(float(x) for x in circuit["top_k_fractions"]),
-            random_trials=int(circuit["random_trials"]),
+        extraction=ExtractionConfig(
+            output_dir=Path(extraction["output_dir"]),
+            save_every=int(extraction.get("save_every", 100)),
         ),
-        analysis=AnalysisConfig(
-            residue_aggregation=analysis["residue_aggregation"],
-            intolerant_fraction=float(analysis["intolerant_fraction"]),
-            bootstrap_samples=int(analysis["bootstrap_samples"]),
-            output_dir=Path(analysis["output_dir"]),
+        probe=ProbeConfig(
+            target=str(probe["target"]),
+            train_fraction=float(probe["train_fraction"]),
+            validation_fraction=float(probe["validation_fraction"]),
+            test_fraction=float(probe["test_fraction"]),
+            c_values=tuple(map(float, probe["c_values"])),
+            max_iter=int(probe.get("max_iter", 2000)),
+            bootstrap_samples=int(probe.get("bootstrap_samples", 1000)),
+            pca_dimensions=tuple(map(int, probe.get("pca_dimensions", []))),
+        ),
+        intervention=InterventionConfig(
+            alphas=tuple(map(float, intervention["alphas"])),
+            examples_per_class=int(intervention["examples_per_class"]),
+            random_directions=int(intervention["random_directions"]),
+            correct_answer=str(intervention.get("correct_answer", " CORRECT")),
+            incorrect_answer=str(intervention.get("incorrect_answer", " INCORRECT")),
         ),
     )

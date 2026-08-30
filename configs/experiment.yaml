@@ -1,31 +1,36 @@
 seed: 42
 
 model:
-  name: facebook/esm2_t6_8M_UR50D
+  name: Qwen/Qwen2.5-Math-1.5B-Instruct
   device: auto
-  batch_size: 16
+  dtype: float16
+  max_length: 2048
 
 data:
-  assay: tem1_firnberg
-  path: data/processed/tem1_firnberg.csv
-  sequence_column: mutated_sequence
-  mutation_column: mutant
-  fitness_column: DMS_score
-  directionality: 1
+  dataset: Qwen/ProcessBench
+  splits: [gsm8k, math, olympiadbench, omnimath]
+  output_path: data/processed/processbench.jsonl
+  # Use 25 for a quick smoke run; null uses all 3,400 traces.
+  max_examples_per_split: null
 
-scoring:
-  strategy: masked_marginal
-  output_path: artifacts/tem1_firnberg/zero_shot_scores.csv
+extraction:
+  output_dir: artifacts/qwen2.5-math-1.5b
+  save_every: 100
 
-circuit:
-  backend: protomech
-  checkpoint: checkpoints/protomech/esm2_8m
-  attribution: activation_x_gradient
-  top_k_fractions: [0.001, 0.005, 0.01, 0.05, 0.1]
-  random_trials: 20
-
-analysis:
-  residue_aggregation: median
-  intolerant_fraction: 0.1
+probe:
+  target: invalid_so_far
+  train_fraction: 0.6
+  validation_fraction: 0.2
+  test_fraction: 0.2
+  c_values: [0.01, 0.1, 1.0, 10.0]
+  max_iter: 2000
   bootstrap_samples: 1000
-  output_dir: artifacts/tem1_firnberg
+  pca_dimensions: [1, 2, 4, 8, 16, 32, 64, 128]
+
+intervention:
+  # Alpha is measured in training-set standard deviations along the probe direction.
+  alphas: [-4, -2, -1, 0, 1, 2, 4]
+  examples_per_class: 128
+  random_directions: 20
+  correct_answer: " CORRECT"
+  incorrect_answer: " INCORRECT"
