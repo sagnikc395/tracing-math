@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
+from scipy.stats import spearmanr
 
 from causal_circuits.config import InterventionConfig
 from causal_circuits.data import ProcessTrace
@@ -74,7 +75,8 @@ def run_interventions(
         direction, config.random_directions, seed=seed + 1
     )
     control_size = min(config.examples_per_class, 16)
-    control_examples = _balanced_sample(test, target, control_size, seed + 1)
+    # Use a subset of the learned-direction sample so learned and random effects are trace matched.
+    control_examples = _balanced_sample(selected, target, control_size, seed + 1)
     extreme_alphas = sorted({min(config.alphas), max(config.alphas)} - {0.0})
     control_rows = list(control_examples.itertuples(index=False))
     control_baselines = {
@@ -122,6 +124,151 @@ def summarize_interventions(frame: pd.DataFrame) -> pd.DataFrame:
         )
         .sort_values(["direction_type", "direction_index", "alpha"])
     )
+
+
+def causal_effect_statistics(
+    frame: pd.DataFrame,
+    *,
+    confidence_level: float = 0.95,
+    bootstrap_samples: int = 1000,
+    subgroup_min_traces: int = 20,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Summarize paired effects, dose shape, and matched random-direction evidence."""
+    learned = frame[frame["direction_type"] == "learned"].copy()
+    rows: list[dict[str, object]] = []
+    scopes = [("overall", "all", learned)]
+    scopes.extend(
+        ("starting_class", str(value), group)
+        for value, group in learned.groupby("invalid_so_far", sort=True)
+    )
+    scopes.extend(
+        ("source", str(value), group) for value, group in learned.groupby("source", sort=True)
+    )
+    tail = (1 - confidence_level) / 2
+    rng = np.random.default_rng(seed)
+    for scope, value, scoped in scopes:
+        n_traces = scoped["trace_id"].nunique()
+        if scope != "overall" and n_traces < subgroup_min_traces:
+            rows.append(
+                {
+                    "statistic": "paired_effect",
+                    "scope": scope,
+                    "value": value,
+                    "status": "suppressed",
+                    "n_traces": n_traces,
+                }
+            )
+            continue
+        for alpha, group in scoped.groupby("alpha", sort=True):
+            values = group["delta_verdict_score"].to_numpy(dtype=float)
+            bootstrap_means = np.asarray([], dtype=float)
+            if bootstrap_samples > 0:
+                bootstrap_means = np.asarray(
+                    [
+                        rng.choice(values, size=len(values), replace=True).mean()
+                        for _ in range(bootstrap_samples)
+                    ]
+                )
+            rows.append(
+                {
+                    "statistic": "paired_effect",
+                    "scope": scope,
+                    "value": value,
+                    "status": "reported",
+                    "alpha": float(alpha),
+                    "estimate": float(values.mean()),
+                    "ci_low": (
+                        float(np.quantile(bootstrap_means, tail))
+                        if bootstrap_means.size
+                        else np.nan
+                    ),
+                    "ci_high": (
+                        float(np.quantile(bootstrap_means, 1 - tail))
+                        if bootstrap_means.size
+                        else np.nan
+                    ),
+                    "n_traces": len(values),
+                }
+            )
+
+    dose = learned.groupby("alpha", as_index=False)["delta_verdict_score"].mean()
+    nonzero = learned[learned["alpha"] != 0]
+    slope = float(np.polyfit(dose["alpha"], dose["delta_verdict_score"], 1)[0])
+    monotonicity = float(spearmanr(dose["alpha"], dose["delta_verdict_score"]).statistic)
+    sign_consistency = float(((nonzero["alpha"] * nonzero["delta_verdict_score"]) > 0).mean())
+    symmetric_pairs = []
+    dose_lookup = dict(zip(dose["alpha"], dose["delta_verdict_score"], strict=True))
+    for alpha in sorted(value for value in dose_lookup if value > 0 and -value in dose_lookup):
+        symmetric_pairs.append(abs(float(dose_lookup[alpha] + dose_lookup[-alpha])))
+    rows.extend(
+        [
+            {
+                "statistic": "dose_slope",
+                "scope": "overall",
+                "value": "all",
+                "status": "reported",
+                "estimate": slope,
+                "n_traces": learned["trace_id"].nunique(),
+            },
+            {
+                "statistic": "dose_rank_monotonicity",
+                "scope": "overall",
+                "value": "all",
+                "status": "reported",
+                "estimate": monotonicity,
+                "n_traces": learned["trace_id"].nunique(),
+            },
+            {
+                "statistic": "signed_effect_consistency",
+                "scope": "overall",
+                "value": "all",
+                "status": "reported",
+                "estimate": sign_consistency,
+                "n_traces": nonzero["trace_id"].nunique(),
+            },
+            {
+                "statistic": "mean_symmetry_error",
+                "scope": "overall",
+                "value": "all",
+                "status": "reported",
+                "estimate": float(np.mean(symmetric_pairs)) if symmetric_pairs else np.nan,
+                "n_traces": learned["trace_id"].nunique(),
+            },
+        ]
+    )
+
+    random = frame[frame["direction_type"] == "random_orthogonal"].copy()
+    if not random.empty:
+        matched_keys = random[["trace_id", "step_index"]].drop_duplicates()
+        matched_learned = learned.merge(
+            matched_keys, on=["trace_id", "step_index"], how="inner", validate="many_to_one"
+        )
+        for alpha, random_alpha in random.groupby("alpha", sort=True):
+            learned_alpha = matched_learned[matched_learned["alpha"] == alpha]
+            if learned_alpha.empty:
+                continue
+            learned_effect = float(learned_alpha["delta_verdict_score"].mean())
+            random_effects = random_alpha.groupby("direction_index")["delta_verdict_score"].mean()
+            if alpha > 0:
+                more_extreme = int((random_effects >= learned_effect).sum())
+            else:
+                more_extreme = int((random_effects <= learned_effect).sum())
+            rows.append(
+                {
+                    "statistic": "learned_vs_random_empirical_p",
+                    "scope": "matched_extreme_alpha",
+                    "value": "all",
+                    "status": "reported",
+                    "alpha": float(alpha),
+                    "estimate": learned_effect,
+                    "random_mean": float(random_effects.mean()),
+                    "empirical_p": float((1 + more_extreme) / (1 + len(random_effects))),
+                    "n_traces": learned_alpha["trace_id"].nunique(),
+                    "n_random_directions": len(random_effects),
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def _balanced_sample(frame: pd.DataFrame, target: str, per_class: int, seed: int) -> pd.DataFrame:

@@ -1,6 +1,8 @@
 # Experiment protocol: when does a math model know the reasoning went wrong?
 
-Status: preregistered analysis plan, written before viewing experimental results.
+Status: preregistered primary analysis plan, written before viewing experimental results. The
+metrics-first expansion in Section 10.1 is exploratory and does not alter primary selection or
+claims.
 
 Submission target: NeurIPS 2026 Workshop on Interpretability for Discovery. The current CFP
 specifies a September 2, 2026, 11:59:59 PM AoE deadline, five pages of main text, double-blind
@@ -258,6 +260,27 @@ This answers whether the invalidity signal is accessible in a small high-varianc
 does **not** estimate intrinsic dimensionality and should remain an appendix result unless it is
 needed to explain a core finding.
 
+### 10.1 Exploratory probe and measurement expansion
+
+The class-balanced L2 logistic probe remains confirmatory and is the only probe allowed to choose
+the primary layer and causal direction. On the same frozen partitions, compare class-balanced L1
+and elastic-net logistic probes. Select `C` and, for elastic net, $l_1$ ratio from
+$\{0.25,0.5,0.75\}$ using validation AUROC; select each family's displayed layer and crossing
+threshold using validation data only. These comparisons are exploratory and cannot revise H1--H3.
+
+For the primary probe, additionally report balanced accuracy, precision, recall, specificity,
+step F1, Brier score, log loss, and expected calibration error; localization within zero, one, and
+two steps; detection, miss, and correct-trace false-alarm rates; early/on-time/late rates; signed
+and absolute localization error; validation and locked-test threshold curves; and error-aligned
+score trajectories. Evaluate `error_onset` as a diagnostic target with L2 only.
+
+Report source, generator, final-answer-correctness, error-position, trace-length, and token-length
+subgroups when they contain at least 20 held-out traces. Learn length-bin boundaries on train plus
+validation traces. Use whole-trace bootstrap intervals and paired bootstrap deltas for family
+comparisons. For interventions, report paired intervals by dose and starting class, sufficiently
+large source subgroups, dose slope and rank monotonicity, signed consistency, symmetry error, and a
+matched-trace empirical comparison against random orthogonal directions.
+
 ## 11. Computational plan for one Colab T4
 
 Priority order:
@@ -369,6 +392,8 @@ Do not plan new experiments on September 2. Optional analyses are dropped before
 | --- | --- |
 | Layer-wise decoding and first-error localization | `probes/layer_metrics.csv` |
 | Trace-level uncertainty | `probes/test_group_bootstrap.csv` |
+| Probe-family robustness and paired deltas | `probes/probe_family_metrics.csv`, `probes/probe_family_comparisons.csv` |
+| Calibration, threshold, trajectory, and subgroup diagnostics | `probes/calibration.csv`, `probes/threshold_sensitivity.csv`, `probes/score_trajectories.csv`, `probes/subgroup_metrics.csv` |
 | Position, lexical, and shuffled-label controls | `probes/controls.csv` |
 | Held-out trajectories and subgroup diagnostics | `probes/test_predictions.csv` |
 | Cross-domain generality | `probes/domain_transfer.csv` |
@@ -376,6 +401,7 @@ Do not plan new experiments on September 2. Optional analyses are dropped before
 | Native verdict competence | `interventions/behavioral_verdict.json` |
 | Individual paired causal effects | `interventions/individual.csv` |
 | Dose response and random controls | `interventions/summary.csv` |
+| Paired causal uncertainty and dose-shape tests | `interventions/effect_statistics.csv` |
 | Exclusion accounting | `activation_shards/shard_*.json` |
 
 Record the Git commit, Colab GPU type, package versions, runtime duration, and all deviations from

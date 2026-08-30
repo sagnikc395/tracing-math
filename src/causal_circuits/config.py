@@ -32,6 +32,13 @@ class ExtractionConfig:
 
 
 @dataclass(frozen=True)
+class ProbeFamilyConfig:
+    name: str
+    penalty: str
+    l1_ratios: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
 class ProbeConfig:
     target: str
     train_fraction: float
@@ -41,6 +48,9 @@ class ProbeConfig:
     max_iter: int
     bootstrap_samples: int
     pca_dimensions: tuple[int, ...]
+    primary_family: str = "l2"
+    families: tuple[ProbeFamilyConfig, ...] = (ProbeFamilyConfig(name="l2", penalty="l2"),)
+    diagnostic_targets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,18 @@ class InterventionConfig:
 
 
 @dataclass(frozen=True)
+class AnalysisConfig:
+    threshold_min: float = 0.05
+    threshold_max: float = 0.95
+    threshold_points: int = 181
+    localization_tolerances: tuple[int, ...] = (0, 1, 2)
+    calibration_bins: int = 10
+    confidence_level: float = 0.95
+    subgroup_min_traces: int = 20
+    exploratory_bootstrap_samples: int = 250
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     seed: int
     model: ModelConfig
@@ -60,6 +82,7 @@ class ExperimentConfig:
     extraction: ExtractionConfig
     probe: ProbeConfig
     intervention: InterventionConfig
+    analysis: AnalysisConfig = AnalysisConfig()
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ExperimentConfig:
@@ -97,12 +120,53 @@ class ExperimentConfig:
             raise ValueError("probe iteration counts cannot be negative")
         if any(value < 1 for value in self.probe.pca_dimensions):
             raise ValueError("probe.pca_dimensions must be positive")
+        family_names = [family.name for family in self.probe.families]
+        if not family_names or len(family_names) != len(set(family_names)):
+            raise ValueError("probe.families must have unique names")
+        if self.probe.primary_family not in family_names:
+            raise ValueError("probe.primary_family must name a configured family")
+        primary = next(
+            family for family in self.probe.families if family.name == self.probe.primary_family
+        )
+        if primary.penalty != "l2":
+            raise ValueError("the confirmatory primary probe family must use the l2 penalty")
+        for family in self.probe.families:
+            if family.penalty not in {"l1", "l2", "elasticnet"}:
+                raise ValueError("probe family penalties must be l1, l2, or elasticnet")
+            if family.penalty == "elasticnet":
+                if not family.l1_ratios or any(not 0 < value < 1 for value in family.l1_ratios):
+                    raise ValueError(
+                        "elasticnet families require l1_ratios strictly between 0 and 1"
+                    )
+            elif family.l1_ratios:
+                raise ValueError("l1_ratios are only valid for elasticnet probe families")
+        allowed_targets = {"invalid_so_far", "error_onset"}
+        if any(target not in allowed_targets for target in self.probe.diagnostic_targets):
+            raise ValueError("probe diagnostic targets must be invalid_so_far or error_onset")
+        if self.probe.target in self.probe.diagnostic_targets:
+            raise ValueError("the primary target cannot also be a diagnostic target")
         if not self.intervention.alphas or 0.0 not in self.intervention.alphas:
             raise ValueError("intervention.alphas must include 0")
         if self.intervention.examples_per_class < 1:
             raise ValueError("intervention.examples_per_class must be positive")
         if self.intervention.random_directions < 0:
             raise ValueError("intervention.random_directions cannot be negative")
+        if not 0 <= self.analysis.threshold_min < self.analysis.threshold_max <= 1:
+            raise ValueError("analysis threshold bounds must satisfy 0 <= min < max <= 1")
+        if self.analysis.threshold_points < 2:
+            raise ValueError("analysis.threshold_points must be at least 2")
+        if not self.analysis.localization_tolerances or any(
+            value < 0 for value in self.analysis.localization_tolerances
+        ):
+            raise ValueError("analysis.localization_tolerances must be non-negative")
+        if self.analysis.calibration_bins < 2:
+            raise ValueError("analysis.calibration_bins must be at least 2")
+        if not 0 < self.analysis.confidence_level < 1:
+            raise ValueError("analysis.confidence_level must be between 0 and 1")
+        if self.analysis.subgroup_min_traces < 1:
+            raise ValueError("analysis.subgroup_min_traces must be positive")
+        if self.analysis.exploratory_bootstrap_samples < 0:
+            raise ValueError("analysis.exploratory_bootstrap_samples cannot be negative")
 
 
 def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
@@ -113,6 +177,11 @@ def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
     extraction = raw["extraction"]
     probe = raw["probe"]
     intervention = raw["intervention"]
+    analysis = raw.get("analysis", {})
+    family_rows = probe.get(
+        "families",
+        [{"name": str(probe.get("primary_family", "l2")), "penalty": "l2"}],
+    )
     return ExperimentConfig(
         seed=int(raw.get("seed", 42)),
         model=ModelConfig(**raw["model"]),
@@ -139,6 +208,16 @@ def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
             max_iter=int(probe.get("max_iter", 2000)),
             bootstrap_samples=int(probe.get("bootstrap_samples", 1000)),
             pca_dimensions=tuple(map(int, probe.get("pca_dimensions", []))),
+            primary_family=str(probe.get("primary_family", "l2")),
+            families=tuple(
+                ProbeFamilyConfig(
+                    name=str(family["name"]),
+                    penalty=str(family["penalty"]),
+                    l1_ratios=tuple(map(float, family.get("l1_ratios", []))),
+                )
+                for family in family_rows
+            ),
+            diagnostic_targets=tuple(map(str, probe.get("diagnostic_targets", []))),
         ),
         intervention=InterventionConfig(
             alphas=tuple(map(float, intervention["alphas"])),
@@ -146,5 +225,17 @@ def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
             random_directions=int(intervention["random_directions"]),
             correct_answer=str(intervention.get("correct_answer", " CORRECT")),
             incorrect_answer=str(intervention.get("incorrect_answer", " INCORRECT")),
+        ),
+        analysis=AnalysisConfig(
+            threshold_min=float(analysis.get("threshold_min", 0.05)),
+            threshold_max=float(analysis.get("threshold_max", 0.95)),
+            threshold_points=int(analysis.get("threshold_points", 181)),
+            localization_tolerances=tuple(
+                map(int, analysis.get("localization_tolerances", [0, 1, 2]))
+            ),
+            calibration_bins=int(analysis.get("calibration_bins", 10)),
+            confidence_level=float(analysis.get("confidence_level", 0.95)),
+            subgroup_min_traces=int(analysis.get("subgroup_min_traces", 20)),
+            exploratory_bootstrap_samples=int(analysis.get("exploratory_bootstrap_samples", 250)),
         ),
     )

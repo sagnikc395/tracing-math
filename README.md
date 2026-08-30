@@ -27,6 +27,9 @@ or generate a new dataset.
   model's `INCORRECT` versus `CORRECT` answer score.
 - **Controls:** problem-grouped splits, validation-only selection, position, current-step TF-IDF,
   shuffled labels, and matched random orthogonal intervention directions.
+- **Exploratory breadth:** compare L2, L1, and elastic-net linear probes and measure calibration,
+  near-miss localization, detection lead/lag, threshold sensitivity, error-aligned trajectories,
+  subgroup robustness, and paired causal-effect uncertainty.
 
 The main claim must be conditional on the results. Decodability alone is not called a mechanism.
 The causal claim is retained only if a signed dose response beats matched random directions on
@@ -93,6 +96,9 @@ extraction:
 probe:
   bootstrap_samples: 0
 
+analysis:
+  exploratory_bootstrap_samples: 0
+
 intervention:
   examples_per_class: 8
   random_directions: 2
@@ -131,14 +137,26 @@ artifacts/qwen2.5-math-1.5b/
 │   ├── domain_transfer.csv
 │   ├── pca_subspace.csv
 │   ├── test_group_bootstrap.csv
+│   ├── test_group_bootstrap_summary.csv
+│   ├── probe_family_metrics.csv
+│   ├── probe_family_predictions.csv
+│   ├── probe_family_comparisons.csv
+│   ├── diagnostic_target_metrics.csv
+│   ├── calibration.csv
+│   ├── threshold_sensitivity.csv
+│   ├── score_trajectories.csv
+│   ├── subgroup_metrics.csv
 │   └── directions.npz
 ├── interventions/
 │   ├── behavioral_verdict.json
 │   ├── individual.csv
+│   ├── effect_statistics.csv
 │   └── summary.csv
 └── figures/
     ├── layerwise_probe.pdf
     ├── pca_subspace.pdf
+    ├── probe_calibration.pdf
+    ├── error_aligned_trajectory.pdf
     └── causal_dose_response.pdf
 ```
 
@@ -154,6 +172,13 @@ The primary probe predicts $y_{ik}$. Step-level AUROC and average precision are 
 metrics. The primary localization metric follows ProcessBench: predict the first step whose
 score exceeds a validation-selected threshold, or `-1` if no step crosses it. Report erroneous
 trace accuracy, fully-correct trace accuracy, and their harmonic mean.
+
+The confirmatory probe remains class-balanced L2 logistic regression. L1 and elastic-net probes
+are exploratory capacity-matched comparisons and cannot select the primary layer or causal
+direction. Expanded diagnostics report step classification and calibration, exact and ±1/±2-step
+localization, miss/false-alarm and early/late rates, score trajectories around the annotated
+onset, and source/generator/difficulty subgroups. All thresholds and hyperparameters remain
+validation-selected; test sweeps are descriptive and never feed selection.
 
 For the intervention at layer $\ell$, the learned raw-coordinate probe direction is normalized
 to $v_\ell$, and the boundary state is changed by

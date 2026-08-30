@@ -19,6 +19,13 @@ extraction:
 
 probe:
   target: invalid_so_far
+  # The L2 family remains the confirmatory probe and the only intervention direction.
+  primary_family: l2
+  families:
+    - {name: l2, penalty: l2}
+    - {name: l1, penalty: l1}
+    - {name: elastic_net, penalty: elasticnet, l1_ratios: [0.25, 0.5, 0.75]}
+  diagnostic_targets: [error_onset]
   train_fraction: 0.6
   validation_fraction: 0.2
   test_fraction: 0.2
@@ -26,6 +33,17 @@ probe:
   max_iter: 2000
   bootstrap_samples: 1000
   pca_dimensions: [1, 2, 4, 8, 16, 32, 64, 128]
+
+analysis:
+  threshold_min: 0.05
+  threshold_max: 0.95
+  threshold_points: 181
+  localization_tolerances: [0, 1, 2]
+  calibration_bins: 10
+  confidence_level: 0.95
+  subgroup_min_traces: 20
+  # Preserve 1,000 resamples for the primary result; exploratory subgroup/family CIs use 250.
+  exploratory_bootstrap_samples: 250
 
 intervention:
   # Alpha is measured in training-set standard deviations along the probe direction.

@@ -4,18 +4,54 @@ import pytest
 
 from causal_circuits.analysis import (
     binary_metrics,
+    calibration_curve_table,
     change_point_metrics,
     choose_threshold,
     fit_layer_probes,
     group_bootstrap_metrics,
 )
-from causal_circuits.config import ProbeConfig
+from causal_circuits.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
 
 
 def test_binary_metrics() -> None:
     result = binary_metrics(np.array([0, 0, 1, 1]), np.array([0.1, 0.2, 0.8, 0.9]))
     assert result["auroc"] == 1.0
     assert result["average_precision"] == 1.0
+    assert result["balanced_accuracy"] == 1.0
+    assert result["brier_score"] == pytest.approx(0.025)
+    assert result["expected_calibration_error"] == pytest.approx(0.15)
+
+
+def test_change_point_metrics_measure_early_late_missed_and_false_alarms() -> None:
+    rows = []
+    scores = []
+    cases = {
+        "early": (2, [0.1, 0.8, 0.9]),
+        "late": (1, [0.1, 0.2, 0.8]),
+        "missed": (1, [0.1, 0.2, 0.3]),
+        "correct": (-1, [0.8, 0.2, 0.1]),
+    }
+    for trace_id, (first_error, trace_scores) in cases.items():
+        for step_index, score in enumerate(trace_scores):
+            rows.append(
+                {"trace_id": trace_id, "step_index": step_index, "first_error": first_error}
+            )
+            scores.append(score)
+    result = change_point_metrics(pd.DataFrame(rows), np.asarray(scores), 0.5)
+    assert result["error_detection_rate"] == pytest.approx(2 / 3)
+    assert result["error_miss_rate"] == pytest.approx(1 / 3)
+    assert result["early_detection_rate"] == pytest.approx(1 / 3)
+    assert result["late_detection_rate"] == pytest.approx(1 / 3)
+    assert result["correct_false_alarm_rate"] == 1.0
+    assert result["mean_signed_localization_error"] == 0.0
+    assert result["mean_absolute_localization_error"] == 1.0
+    assert result["error_within_1_accuracy"] == pytest.approx(2 / 3)
+
+
+def test_calibration_table_keeps_empty_bins() -> None:
+    result = calibration_curve_table(np.array([0, 1]), np.array([0.1, 0.9]), bins=4)
+    assert len(result) == 4
+    assert result["n"].sum() == 2
 
 
 def test_change_point_metrics_recover_first_error_and_correct_trace() -> None:
@@ -67,11 +103,27 @@ def test_layer_probe_pipeline_smoke() -> None:
         max_iter=200,
         bootstrap_samples=0,
         pca_dimensions=(1, 2),
+        families=(
+            ProbeFamilyConfig(name="l2", penalty="l2"),
+            ProbeFamilyConfig(name="l1", penalty="l1"),
+            ProbeFamilyConfig(name="elastic_net", penalty="elasticnet", l1_ratios=(0.25, 0.5)),
+        ),
+        diagnostic_targets=("error_onset",),
     )
-    result = fit_layer_probes(activations, pd.DataFrame(rows), config, seed=42)
+    result = fit_layer_probes(
+        activations,
+        pd.DataFrame(rows),
+        config,
+        seed=42,
+        analysis_config=AnalysisConfig(subgroup_min_traces=2),
+    )
     assert result.directions.shape == (3, 6)
     assert result.selected_intervention_layer in {0, 1}
     assert len(result.transfer) == 4
+    assert set(result.family_metrics["family"]) == {"l2", "l1", "elastic_net"}
+    assert set(result.diagnostic_metrics["target"]) == {"error_onset"}
+    assert not result.threshold_sensitivity.empty
+    assert not result.calibration.empty
 
 
 def test_bootstrap_samples_whole_traces() -> None:

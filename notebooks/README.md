@@ -11,7 +11,9 @@ produce the same artifacts.
    be enabled with `RUN_INTERVENTIONS = True`.
 2. After the smoke run succeeds, change the same notebook to `RUN_MODE = "full"` and restart from
    the configuration cell. Full mode mounts Google Drive, restores all preregistered sample sizes,
-   enables the causal stage, and summarizes the paper-facing metrics and figures.
+   enables the causal stage, and summarizes the paper-facing metrics and figures. Probe fitting
+   also produces exploratory L1/elastic-net comparisons, calibration, localization tolerance,
+   trajectory, subgroup, and paired causal-effect tables from the same cached activations.
 3. After the completion checklist passes, run the final publishing cell to copy the result package
    into the repository's `artifacts/` subtree, commit it, and push it to GitHub.
 

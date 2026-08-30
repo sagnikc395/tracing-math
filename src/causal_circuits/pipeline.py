@@ -11,7 +11,11 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from causal_circuits.analysis import ProbeResults, binary_metrics, fit_layer_probes
-from causal_circuits.circuits import run_interventions, summarize_interventions
+from causal_circuits.circuits import (
+    causal_effect_statistics,
+    run_interventions,
+    summarize_interventions,
+)
 from causal_circuits.config import ExperimentConfig
 from causal_circuits.data import (
     assign_partitions,
@@ -132,7 +136,13 @@ def load_activation_shards(output_dir: str | Path) -> tuple[np.ndarray, pd.DataF
 
 def fit_and_save_probes(config: ExperimentConfig) -> ProbeResults:
     activations, metadata = load_activation_shards(config.extraction.output_dir)
-    results = fit_layer_probes(activations, metadata, config.probe, seed=config.seed)
+    results = fit_layer_probes(
+        activations,
+        metadata,
+        config.probe,
+        seed=config.seed,
+        analysis_config=config.analysis,
+    )
     output = config.extraction.output_dir / "probes"
     output.mkdir(parents=True, exist_ok=True)
     results.metrics.to_csv(output / "layer_metrics.csv", index=False)
@@ -141,6 +151,15 @@ def fit_and_save_probes(config: ExperimentConfig) -> ProbeResults:
     results.transfer.to_csv(output / "domain_transfer.csv", index=False)
     results.pca_curve.to_csv(output / "pca_subspace.csv", index=False)
     results.bootstrap.to_csv(output / "test_group_bootstrap.csv", index=False)
+    results.bootstrap_summary.to_csv(output / "test_group_bootstrap_summary.csv", index=False)
+    results.family_metrics.to_csv(output / "probe_family_metrics.csv", index=False)
+    results.family_predictions.to_csv(output / "probe_family_predictions.csv", index=False)
+    results.diagnostic_metrics.to_csv(output / "diagnostic_target_metrics.csv", index=False)
+    results.calibration.to_csv(output / "calibration.csv", index=False)
+    results.threshold_sensitivity.to_csv(output / "threshold_sensitivity.csv", index=False)
+    results.trajectories.to_csv(output / "score_trajectories.csv", index=False)
+    results.subgroups.to_csv(output / "subgroup_metrics.csv", index=False)
+    results.comparisons.to_csv(output / "probe_family_comparisons.csv", index=False)
     np.savez(
         output / "directions.npz",
         directions=results.directions,
@@ -184,9 +203,20 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
     output.mkdir(parents=True, exist_ok=True)
     results.to_csv(output / "individual.csv", index=False)
     summarize_interventions(results).to_csv(output / "summary.csv", index=False)
+    causal_effect_statistics(
+        results,
+        confidence_level=config.analysis.confidence_level,
+        bootstrap_samples=config.probe.bootstrap_samples,
+        subgroup_min_traces=config.analysis.subgroup_min_traces,
+        seed=config.seed,
+    ).to_csv(output / "effect_statistics.csv", index=False)
     baseline = results[(results["direction_type"] == "learned") & (results["alpha"] == 0.0)]
+    baseline_probabilities = 1 / (1 + np.exp(-baseline["verdict_score"].to_numpy()))
     baseline_metrics = binary_metrics(
-        baseline[config.probe.target].to_numpy(), baseline["verdict_score"].to_numpy()
+        baseline[config.probe.target].to_numpy(),
+        baseline_probabilities,
+        threshold=0.5,
+        calibration_bins=config.analysis.calibration_bins,
     )
     baseline_metrics["zero_threshold_accuracy"] = float(
         (
@@ -223,6 +253,30 @@ def plot_artifacts(config: ExperimentConfig) -> list[Path]:
         axis.set_xscale("log", base=2)
         axis.set(xlabel="Top-variance PCA dimensions", ylabel="Held-out AUROC", ylim=(0, 1))
         outputs.append(_save_figure(figure, figure_dir / "pca_subspace.pdf"))
+
+    calibration_path = probe_dir / "calibration.csv"
+    if calibration_path.exists() and not pd.read_csv(calibration_path).empty:
+        calibration = pd.read_csv(calibration_path).dropna(subset=["mean_score", "positive_rate"])
+        figure, axis = plt.subplots(figsize=(4, 4))
+        axis.plot([0, 1], [0, 1], color="0.6", linestyle="--", linewidth=1)
+        axis.plot(calibration["mean_score"], calibration["positive_rate"], marker="o")
+        axis.set(
+            xlabel="Mean predicted score",
+            ylabel="Observed invalid-step rate",
+            xlim=(0, 1),
+            ylim=(0, 1),
+        )
+        outputs.append(_save_figure(figure, figure_dir / "probe_calibration.pdf"))
+
+    trajectories_path = probe_dir / "score_trajectories.csv"
+    if trajectories_path.exists() and not pd.read_csv(trajectories_path).empty:
+        trajectories = pd.read_csv(trajectories_path)
+        relative = trajectories[trajectories["metric"] == "mean_score_at_relative_step"]
+        figure, axis = plt.subplots(figsize=(5, 3.5))
+        axis.plot(relative["relative_step"], relative["value"], marker="o")
+        axis.axvline(0, color="0.6", linestyle="--", linewidth=1)
+        axis.set(xlabel="Step relative to first error", ylabel="Mean probe score", ylim=(0, 1))
+        outputs.append(_save_figure(figure, figure_dir / "error_aligned_trajectory.pdf"))
 
     intervention_path = config.extraction.output_dir / "interventions" / "summary.csv"
     if intervention_path.exists():
