@@ -1,0 +1,63 @@
+seed: 42
+model:
+  name: Qwen/Qwen2.5-Math-1.5B-Instruct
+  device: auto
+  dtype: bfloat16
+  max_length: 2048
+data:
+  dataset: Qwen/ProcessBench
+  splits:
+  - gsm8k
+  - math
+  - olympiadbench
+  - omnimath
+  output_path: /content/drive/MyDrive/math-error-tracing/data/processbench.jsonl
+  max_examples_per_split: null
+extraction:
+  output_dir: /content/drive/MyDrive/math-error-tracing/artifacts/qwen2.5-math-1.5b-a100-bf16
+  save_every: 100
+  batch_size: 16
+probe:
+  target: invalid_so_far
+  primary_family: l2
+  families:
+  - name: l2
+    penalty: l2
+  diagnostic_targets: []
+  train_fraction: 0.6
+  validation_fraction: 0.2
+  test_fraction: 0.2
+  c_values:
+  - 0.01
+  - 0.1
+  - 1.0
+  - 10.0
+  max_iter: 2000
+  bootstrap_samples: 1000
+  pca_dimensions: []
+analysis:
+  threshold_min: 0.05
+  threshold_max: 0.95
+  threshold_points: 181
+  localization_tolerances:
+  - 0
+  - 1
+  - 2
+  calibration_bins: 10
+  confidence_level: 0.95
+  subgroup_min_traces: 20
+  exploratory_bootstrap_samples: 0
+intervention:
+  alphas:
+  - -4
+  - -2
+  - -1
+  - 0
+  - 1
+  - 2
+  - 4
+  examples_per_class: 128
+  random_directions: 20
+  correct_answer: ' CORRECT'
+  incorrect_answer: ' INCORRECT'
+  batch_size: 8
