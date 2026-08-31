@@ -413,3 +413,29 @@ While a run is active, inspect `stage_status.json`, the current stage's `progres
 files. Re-running the same command after a disconnect continues from those checkpoints. Every
 numerical result and decision file is stored under `artifacts/experiment2`; Experiment 1 files are
 never modified.
+
+### Runtime implementation notes
+
+The optimized implementation does not omit any stage or alter the fixed scientific design. In
+particular, it retains all 29 hidden-state indices, both verdict mappings, 32 causal examples per
+class, both causal directions, all five doses, and 1,000 bootstrap resamples.
+
+The GPU path avoids work that is not part of any estimand. Semantic traces are length-bucketed
+within each resumable shard to limit padding, and their requested boundary states are transferred
+from GPU to CPU in one operation per batch. Verdict and causal scoring project only the final
+non-padding decoder state; full vocabulary logits for earlier prompt positions were never read and
+are no longer materialized. For each trace/mapping causal job, the eight non-zero combinations of
+two directions and four doses are evaluated in batches of up to `causal.batch_size`; the two
+zero-dose records reuse the gradient pass's baseline margin.
+
+The A100 configuration uses `causal.batch_size: 8`. This value affects only scheduling and memory,
+not samples or numerical definitions, and may be lowered after an out-of-memory error without
+invalidating existing checkpoints. Resume guards intentionally ignore batch-size-only changes but
+still reject changes to the model, data, labels, sample counts, directions, doses, dtype, or context
+length.
+
+For the fixed 64-trace causal sample and two mappings, this changes the intervention portion from
+eight decoder invocations per trace/mapping job to one, reducing total causal decoder invocations
+from 1,152 (128 gradient plus 1,024 intervention passes) to 256 (128 gradient plus 128 batched
+intervention passes). This count describes model invocations, not an assumed wall-clock speedup;
+batch compute and prompt length still determine actual Colab runtime.

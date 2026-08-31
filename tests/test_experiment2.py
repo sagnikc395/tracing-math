@@ -1,8 +1,10 @@
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from causal_circuits.experiment2_analysis import (
     bootstrap_onset_jump,
@@ -12,13 +14,18 @@ from causal_circuits.experiment2_analysis import (
 )
 from causal_circuits.experiment2_causal import (
     _completed_causal_jobs,
+    _decoder_final_hidden,
     _deduplicate_causal_rows,
+    _ensure_causal_checkpoint_identity,
+    _label_margins,
     balanced_boundary_sample,
     counterbalance_interventions,
     counterbalance_verdict_rows,
+    intervened_next_token_margins,
     verdict_mappings,
 )
 from causal_circuits.experiment2_config import Experiment2Config
+from causal_circuits.experiment2_pipeline import experiment2_run_identity
 from causal_circuits.experiment2_runtime import (
     ensure_checkpoint_identity,
     run_stage,
@@ -38,6 +45,17 @@ def test_experiment2_config_and_path_overrides(tmp_path) -> None:
     assert overridden.output_dir == tmp_path / "experiment2"
     assert overridden.data.path == tmp_path / "data.jsonl"
     assert overridden.output_dir != config.output_dir
+
+
+def test_experiment2_run_identity_ignores_operational_batch_sizes() -> None:
+    config = Experiment2Config.from_yaml("configs/experiment2.yaml")
+    changed = replace(
+        config,
+        semantic_extraction=replace(config.semantic_extraction, batch_size=1),
+        verdict=replace(config.verdict, batch_size=1),
+        causal=replace(config.causal, batch_size=1),
+    )
+    assert experiment2_run_identity(changed) == experiment2_run_identity(config)
 
 
 def test_semantic_token_before_marker_skips_whitespace() -> None:
@@ -178,6 +196,125 @@ def test_stage_status_records_failure_and_checkpoint_identity_is_guarded(tmp_pat
     ensure_checkpoint_identity(identity_path, {"model": "a", "labels": ("A", "B")})
     with pytest.raises(RuntimeError, match="identity mismatch"):
         ensure_checkpoint_identity(identity_path, {"model": "b"})
+
+
+def test_causal_checkpoint_identity_ignores_only_operational_batch_size(tmp_path) -> None:
+    identity_path = tmp_path / "checkpoint_identity.json"
+    original = {"model": "a", "stage_config": {"examples_per_class": 32, "batch_size": 1}}
+    ensure_checkpoint_identity(identity_path, original)
+    _ensure_causal_checkpoint_identity(
+        identity_path,
+        {"model": "a", "stage_config": {"examples_per_class": 32, "batch_size": 8}},
+    )
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        _ensure_causal_checkpoint_identity(
+            identity_path,
+            {"model": "a", "stage_config": {"examples_per_class": 16, "batch_size": 8}},
+        )
+
+
+def test_final_state_only_logits_match_full_sequence_logits() -> None:
+    class TinyDecoder(torch.nn.Module):
+        def forward(self, input_ids, attention_mask, **_kwargs):
+            hidden = torch.nn.functional.one_hot(input_ids, num_classes=4).float()
+            return SimpleNamespace(last_hidden_state=hidden)
+
+    lm_head = torch.nn.Linear(4, 6, bias=False)
+    adapter = SimpleNamespace(
+        _torch=torch,
+        model=SimpleNamespace(model=TinyDecoder(), lm_head=lm_head),
+    )
+    inputs = {
+        "input_ids": torch.tensor([[1, 2, 0], [3, 1, 2]]),
+        "attention_mask": torch.tensor([[1, 1, 0], [1, 1, 1]]),
+    }
+    full_hidden = adapter.model.model(**inputs).last_hidden_state
+    full_logits = adapter.model.lm_head(full_hidden)
+    final_hidden = _decoder_final_hidden(adapter, inputs)
+    margins = _label_margins(adapter, final_hidden, [1, 2], [4, 5])
+    expected = torch.stack(
+        [full_logits[0, 1, 4] - full_logits[0, 1, 1], full_logits[1, 2, 5] - full_logits[1, 2, 2]]
+    )
+    torch.testing.assert_close(margins, expected)
+
+
+def test_batched_interventions_match_one_at_a_time() -> None:
+    class TinyTokenizer:
+        padding_side = "right"
+
+        def __call__(self, prompts, **_kwargs):
+            encoded = {
+                "short": [1, 2, 3],
+                "long": [2, 1, 3, 2],
+            }
+            rows = [encoded[prompt] for prompt in prompts]
+            width = max(map(len, rows))
+            return {
+                "input_ids": torch.tensor([row + [0] * (width - len(row)) for row in rows]),
+                "attention_mask": torch.tensor(
+                    [[1] * len(row) + [0] * (width - len(row)) for row in rows]
+                ),
+            }
+
+    class CausalMix(torch.nn.Module):
+        def forward(self, hidden):
+            return hidden + hidden.cumsum(dim=1)
+
+    class TinyDecoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embedding = torch.nn.Embedding(4, 4)
+            self.layers = torch.nn.ModuleList([CausalMix()])
+
+        def forward(self, input_ids, attention_mask, **_kwargs):
+            hidden = self.embedding(input_ids)
+            for layer in self.layers:
+                hidden = layer(hidden)
+            return SimpleNamespace(last_hidden_state=hidden)
+
+    torch.manual_seed(42)
+    decoder = TinyDecoder()
+    adapter = SimpleNamespace(
+        _torch=torch,
+        tokenizer=TinyTokenizer(),
+        model=SimpleNamespace(model=decoder, lm_head=torch.nn.Linear(4, 6, bias=False)),
+        decoder_layers=decoder.layers,
+        device="cpu",
+        max_length=16,
+    )
+    common = {
+        "layer": 0,
+        "valid_token_ids": [1, 1],
+        "invalid_token_ids": [4, 4],
+    }
+    directions = [
+        np.array([1, 0, 0, 0], dtype=np.float32),
+        np.array([0, 1, 0, 0], dtype=np.float32),
+    ]
+    batched = intervened_next_token_margins(
+        adapter,
+        ["short", "long"],
+        [1, 2],
+        directions=directions,
+        magnitudes=[0.5, -0.25],
+        **common,
+    )
+    individual = [
+        intervened_next_token_margins(
+            adapter,
+            [prompt],
+            [boundary],
+            layer=0,
+            directions=[direction],
+            magnitudes=[magnitude],
+            valid_token_ids=[1],
+            invalid_token_ids=[4],
+        )[0]
+        for prompt, boundary, direction, magnitude in zip(
+            ["short", "long"], [1, 2], directions, [0.5, -0.25], strict=True
+        )
+    ]
+    np.testing.assert_allclose(batched, individual, rtol=1e-6, atol=1e-6)
 
 
 def test_balanced_boundary_sample_uses_distinct_traces() -> None:

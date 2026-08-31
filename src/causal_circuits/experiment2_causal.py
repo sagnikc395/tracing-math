@@ -38,7 +38,7 @@ def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
     """Audit a single-token verdict under fixed and reversed A/B mappings."""
     output = config.output_dir / "verdict_audit"
     output.mkdir(parents=True, exist_ok=True)
-    ensure_checkpoint_identity(
+    _ensure_causal_checkpoint_identity(
         output / "checkpoint_identity.json",
         _causal_checkpoint_identity(config, "verdict_audit"),
     )
@@ -68,10 +68,7 @@ def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
     else:
         individual = pd.DataFrame()
     rows = individual.to_dict("records")
-    completed = {
-        _verdict_job_key(row)
-        for row in rows
-    }
+    completed = {_verdict_job_key(row) for row in rows}
     total_jobs = sum(len(sample) * len(mappings) for _, sample in samples)
     write_progress(
         output / "progress.json",
@@ -118,7 +115,6 @@ def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
                     prompts[start : start + config.verdict.batch_size],
                     valid_token_id=token_ids[valid_label],
                     invalid_token_id=token_ids[invalid_label],
-                    batch_size=config.verdict.batch_size,
                 )
                 for row, result in zip(batch_rows, scored, strict=True):
                     label = int(row.invalid_so_far)
@@ -177,8 +173,7 @@ def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
         },
     )
     validation = summary[
-        (summary["partition"] == "validation")
-        & (summary["mapping"] == "counterbalanced")
+        (summary["partition"] == "validation") & (summary["mapping"] == "counterbalanced")
     ].iloc[0]
     competent = bool(
         validation["auroc"] >= 0.60
@@ -188,8 +183,7 @@ def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
     decision = {
         "validation_competent": competent,
         "criterion": (
-            "counterbalanced validation AUROC >= 0.60, recall >= 0.55, "
-            "and specificity >= 0.55"
+            "counterbalanced validation AUROC >= 0.60, recall >= 0.55, and specificity >= 0.55"
         ),
         "validation_auroc": float(validation["auroc"]),
         "validation_recall": float(validation["recall"]),
@@ -239,34 +233,26 @@ def run_causal_validation(config: Experiment2Config) -> dict[str, object]:
 
     output = config.output_dir / "causal_validation"
     output.mkdir(parents=True, exist_ok=True)
-    ensure_checkpoint_identity(
+    _ensure_causal_checkpoint_identity(
         output / "checkpoint_identity.json",
         _causal_checkpoint_identity(
             config,
             "causal_validation",
-            directions_sha256=sha256_file(
-                config.experiment1_dir / "probes" / "directions.npz"
-            ),
+            directions_sha256=sha256_file(config.experiment1_dir / "probes" / "directions.npz"),
             selected_layer=selected_layer,
         ),
     )
     alignment_checkpoint = output / "gradient_alignment.checkpoint.csv"
     intervention_checkpoint = output / "interventions.checkpoint.csv"
     alignment = (
-        pd.read_csv(alignment_checkpoint)
-        if alignment_checkpoint.exists()
-        else pd.DataFrame()
+        pd.read_csv(alignment_checkpoint) if alignment_checkpoint.exists() else pd.DataFrame()
     )
     interventions = (
-        pd.read_csv(intervention_checkpoint)
-        if intervention_checkpoint.exists()
-        else pd.DataFrame()
+        pd.read_csv(intervention_checkpoint) if intervention_checkpoint.exists() else pd.DataFrame()
     )
     alignment_rows = alignment.to_dict("records")
     intervention_rows = interventions.to_dict("records")
-    initially_completed = _completed_causal_jobs(alignment) & _completed_causal_jobs(
-        interventions
-    )
+    initially_completed = _completed_causal_jobs(alignment) & _completed_causal_jobs(interventions)
     completed = set(initially_completed)
     mappings = verdict_mappings(config.verdict.labels)
     total_jobs = len(sample) * len(mappings)
@@ -336,45 +322,57 @@ def run_causal_validation(config: Experiment2Config) -> dict[str, object]:
             )
         selected_gradient = gradients[selected_layer].copy()
         selected_gradient /= max(float(np.linalg.norm(selected_gradient)), 1e-12)
+        intervention_specs = []
         for direction_type, direction in (
             ("learned_probe", selected_direction),
             ("gradient_positive_control", selected_gradient),
         ):
             for alpha in config.causal.alphas:
                 if alpha == 0:
-                    margin = baseline
-                else:
-                    margin, _ = intervened_next_token_margin(
-                        adapter,
-                        prompt,
-                        boundary,
-                        layer=selected_layer,
-                        direction=direction,
-                        magnitude=float(alpha) * selected_scale,
-                        valid_token_id=token_ids[valid_label],
-                        invalid_token_id=token_ids[invalid_label],
+                    intervention_rows.append(
+                        _intervention_row(
+                            row,
+                            mapping_name=mapping_name,
+                            direction_type=direction_type,
+                            selected_layer=selected_layer,
+                            alpha=float(alpha),
+                            margin=baseline,
+                            baseline=baseline,
+                        )
                     )
+                else:
+                    intervention_specs.append(
+                        (direction_type, float(alpha), direction, float(alpha) * selected_scale)
+                    )
+
+        # All non-zero doses share the same prompt and layer.  Score them together instead
+        # of tokenizing and running a full decoder pass once per direction/dose.
+        for start in range(0, len(intervention_specs), config.causal.batch_size):
+            chunk = intervention_specs[start : start + config.causal.batch_size]
+            margins = intervened_next_token_margins(
+                adapter,
+                [prompt] * len(chunk),
+                [boundary] * len(chunk),
+                layer=selected_layer,
+                directions=[spec[2] for spec in chunk],
+                magnitudes=[spec[3] for spec in chunk],
+                valid_token_ids=[token_ids[valid_label]] * len(chunk),
+                invalid_token_ids=[token_ids[invalid_label]] * len(chunk),
+            )
+            for (direction_type, alpha, _, _), margin in zip(chunk, margins, strict=True):
                 intervention_rows.append(
-                    {
-                        "trace_id": str(row.trace_id),
-                        "source": str(row.source),
-                        "generator": str(row.generator),
-                        "step_index": int(row.step_index),
-                        "first_error": int(row.first_error),
-                        "invalid_so_far": int(row.invalid_so_far),
-                        "mapping": mapping_name,
-                        "direction_type": direction_type,
-                        "layer": selected_layer,
-                        "alpha": float(alpha),
-                        "margin": margin,
-                        "baseline_margin": baseline,
-                        "delta_margin": margin - baseline,
-                    }
+                    _intervention_row(
+                        row,
+                        mapping_name=mapping_name,
+                        direction_type=direction_type,
+                        selected_layer=selected_layer,
+                        alpha=alpha,
+                        margin=margin,
+                        baseline=baseline,
+                    )
                 )
         alignment = _deduplicate_causal_rows(pd.DataFrame(alignment_rows), alignment=True)
-        interventions = _deduplicate_causal_rows(
-            pd.DataFrame(intervention_rows), alignment=False
-        )
+        interventions = _deduplicate_causal_rows(pd.DataFrame(intervention_rows), alignment=False)
         alignment_rows = alignment.to_dict("records")
         intervention_rows = interventions.to_dict("records")
         atomic_save_csv(alignment_checkpoint, alignment)
@@ -420,9 +418,7 @@ def run_causal_validation(config: Experiment2Config) -> dict[str, object]:
     maximum_alpha = max(value for value in config.causal.alphas if value > 0)
     negative = positive[positive["alpha"] == minimum_alpha].iloc[0]
     positive_row = positive[positive["alpha"] == maximum_alpha].iloc[0]
-    positive_control_passed = bool(
-        negative["ci_high"] < 0 and positive_row["ci_low"] > 0
-    )
+    positive_control_passed = bool(negative["ci_high"] < 0 and positive_row["ci_low"] > 0)
     decision = {
         "selected_layer": selected_layer,
         "readout_validation_competent": bool(readout_decision["validation_competent"]),
@@ -458,15 +454,64 @@ def _causal_checkpoint_identity(
     **extra: object,
 ) -> dict[str, object]:
     stage_config = config.verdict if stage == "verdict_audit" else config.causal
+    scientific_stage_config = asdict(stage_config)
+    scientific_stage_config.pop("batch_size", None)
     return {
         "schema_version": 1,
         "stage": stage,
         "dataset_sha256": sha256_file(config.data.path),
         "model": asdict(config.model),
         "seed": config.seed,
-        "stage_config": asdict(stage_config),
+        "stage_config": scientific_stage_config,
         "verdict_labels": list(config.verdict.labels),
         **extra,
+    }
+
+
+def _ensure_causal_checkpoint_identity(
+    path: Path,
+    identity: dict[str, object],
+) -> None:
+    """Allow resuming when only an operational batch size has changed."""
+    if path.exists():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+
+        def scientific_fields(payload: dict[str, object]) -> dict[str, object]:
+            normalized = json.loads(json.dumps(payload))
+            stage_config = normalized.get("stage_config", {})
+            if isinstance(stage_config, dict):
+                stage_config.pop("batch_size", None)
+            return normalized
+
+        if scientific_fields(existing) == scientific_fields(identity):
+            return
+    ensure_checkpoint_identity(path, identity)
+
+
+def _intervention_row(
+    row,
+    *,
+    mapping_name: str,
+    direction_type: str,
+    selected_layer: int,
+    alpha: float,
+    margin: float,
+    baseline: float,
+) -> dict[str, object]:
+    return {
+        "trace_id": str(row.trace_id),
+        "source": str(row.source),
+        "generator": str(row.generator),
+        "step_index": int(row.step_index),
+        "first_error": int(row.first_error),
+        "invalid_so_far": int(row.invalid_so_far),
+        "mapping": mapping_name,
+        "direction_type": direction_type,
+        "layer": selected_layer,
+        "alpha": alpha,
+        "margin": margin,
+        "baseline_margin": baseline,
+        "delta_margin": margin - baseline,
     }
 
 
@@ -577,37 +622,33 @@ def score_next_token_margins(
     *,
     valid_token_id: int,
     invalid_token_id: int,
-    batch_size: int,
 ) -> list[dict[str, float | int]]:
+    """Score one already-sized prompt batch at its next-token position."""
     results = []
-    for start in range(0, len(prompts), batch_size):
-        chunk = prompts[start : start + batch_size]
-        encoded = adapter.tokenizer(
-            chunk,
-            add_special_tokens=False,
-            padding=True,
-            return_tensors="pt",
+    encoded = adapter.tokenizer(
+        prompts,
+        add_special_tokens=False,
+        padding=True,
+        return_tensors="pt",
+    )
+    if int(encoded["attention_mask"].sum(dim=1).max()) > adapter.max_length:
+        raise TraceTooLongError("Experiment 2 verdict batch exceeds the context limit")
+    inputs = {key: value.to(adapter.device) for key, value in encoded.items()}
+    with adapter._torch.inference_mode():
+        # Calling the CausalLM wrapper creates [batch, sequence, vocabulary] logits,
+        # although this audit needs only the next-token distribution. Run the decoder
+        # and project only each prompt's final non-padding hidden state.
+        final_hidden = _decoder_final_hidden(adapter, inputs)
+        logits = adapter.model.lm_head(final_hidden)
+    for next_logits in logits:
+        results.append(
+            {
+                "margin": float(
+                    (next_logits[invalid_token_id] - next_logits[valid_token_id]).item()
+                ),
+                "greedy_token_id": int(next_logits.argmax().item()),
+            }
         )
-        if int(encoded["attention_mask"].sum(dim=1).max()) > adapter.max_length:
-            raise TraceTooLongError("Experiment 2 verdict batch exceeds the context limit")
-        inputs = {key: value.to(adapter.device) for key, value in encoded.items()}
-        with adapter._torch.inference_mode():
-            logits = adapter.model(**inputs, use_cache=False, return_dict=True).logits
-        for batch_index in range(len(chunk)):
-            positions = adapter._torch.nonzero(
-                inputs["attention_mask"][batch_index],
-                as_tuple=False,
-            ).squeeze(1)
-            final_position = int(positions[-1].item())
-            next_logits = logits[batch_index, final_position]
-            results.append(
-                {
-                    "margin": float(
-                        (next_logits[invalid_token_id] - next_logits[valid_token_id]).item()
-                    ),
-                    "greedy_token_id": int(next_logits.argmax().item()),
-                }
-            )
     return results
 
 
@@ -625,24 +666,24 @@ def gradients_at_boundary(
     captured = {}
     handles = []
     for layer, module in enumerate(adapter.decoder_layers):
+
         def capture(_module, args, *, layer_index=layer):
             captured[layer_index] = args[0]
 
         handles.append(module.register_forward_pre_hook(capture))
     try:
         with adapter._torch.enable_grad():
-            logits = adapter.model(**inputs, use_cache=False, return_dict=True).logits
-            positions = adapter._torch.nonzero(
-                inputs["attention_mask"][0],
-                as_tuple=False,
-            ).squeeze(1)
-            next_logits = logits[0, int(positions[-1].item())]
-            margin = next_logits[invalid_token_id] - next_logits[valid_token_id]
+            final_hidden = _decoder_final_hidden(adapter, inputs)
+            margin = _label_margins(
+                adapter,
+                final_hidden,
+                [valid_token_id],
+                [invalid_token_id],
+            )[0]
             tensors = [captured[index] for index in range(len(adapter.decoder_layers))]
             gradients = adapter._torch.autograd.grad(margin, tensors)
         boundary_gradients = [
-            gradient[0, boundary].detach().float().cpu().numpy().copy()
-            for gradient in gradients
+            gradient[0, boundary].detach().float().cpu().numpy().copy() for gradient in gradients
         ]
         return float(margin.detach().float().cpu().item()), boundary_gradients
     finally:
@@ -650,39 +691,108 @@ def gradients_at_boundary(
             handle.remove()
 
 
-def intervened_next_token_margin(
+def intervened_next_token_margins(
     adapter: HuggingFaceMathModel,
-    prompt: str,
-    boundary: int,
+    prompts: list[str],
+    boundaries: list[int],
     *,
     layer: int,
-    direction: np.ndarray,
-    magnitude: float,
-    valid_token_id: int,
-    invalid_token_id: int,
-) -> tuple[float, int]:
-    encoded = adapter.tokenizer(prompt, add_special_tokens=False, return_tensors="pt")
+    directions: list[np.ndarray],
+    magnitudes: list[float],
+    valid_token_ids: list[int],
+    invalid_token_ids: list[int],
+) -> list[float]:
+    """Score independent interventions in one padded decoder batch."""
+    size = len(prompts)
+    if not (
+        size
+        and len(boundaries) == size
+        and len(directions) == size
+        and len(magnitudes) == size
+        and len(valid_token_ids) == size
+        and len(invalid_token_ids) == size
+    ):
+        raise ValueError("Batched intervention inputs must have the same non-zero length")
+    encoded = adapter.tokenizer(
+        prompts,
+        add_special_tokens=False,
+        padding=True,
+        return_tensors="pt",
+    )
+    token_counts = encoded["attention_mask"].sum(dim=1)
+    if int(token_counts.max()) > adapter.max_length:
+        raise TraceTooLongError("Experiment 2 intervention batch exceeds the context limit")
     inputs = {key: value.to(adapter.device) for key, value in encoded.items()}
-    vector = adapter._torch.as_tensor(direction, device=adapter.device)
+    injection_boundaries = _padded_boundaries(adapter, inputs, boundaries)
+    vectors = adapter._torch.as_tensor(
+        np.asarray(directions),
+        device=adapter.device,
+    )
+    doses = adapter._torch.as_tensor(
+        magnitudes,
+        device=adapter.device,
+        dtype=adapter._torch.float32,
+    )
 
     def inject(_module, args):
         hidden = args[0].clone()
-        hidden[0, boundary] += magnitude * vector.to(hidden.dtype)
+        batch_indices = adapter._torch.arange(size, device=hidden.device)
+        additions = doses[:, None] * vectors
+        hidden[batch_indices, injection_boundaries] += additions.to(hidden.dtype)
         return (hidden, *args[1:])
 
     handle = adapter.decoder_layers[layer].register_forward_pre_hook(inject)
     try:
         with adapter._torch.inference_mode():
-            logits = adapter.model(**inputs, use_cache=False, return_dict=True).logits
-        positions = adapter._torch.nonzero(
-            inputs["attention_mask"][0],
-            as_tuple=False,
-        ).squeeze(1)
-        next_logits = logits[0, int(positions[-1].item())]
-        margin = float((next_logits[invalid_token_id] - next_logits[valid_token_id]).item())
-        return margin, int(next_logits.argmax().item())
+            final_hidden = _decoder_final_hidden(adapter, inputs)
+            margins = _label_margins(
+                adapter,
+                final_hidden,
+                valid_token_ids,
+                invalid_token_ids,
+            )
+        return margins.detach().float().cpu().tolist()
     finally:
         handle.remove()
+
+
+def _decoder_final_hidden(adapter: HuggingFaceMathModel, inputs: dict[str, object]):
+    output = adapter.model.model(
+        **inputs,
+        use_cache=False,
+        return_dict=True,
+    )
+    hidden = output.last_hidden_state
+    attention_mask = inputs["attention_mask"].bool()
+    positions = adapter._torch.arange(hidden.shape[1], device=hidden.device)[None, :]
+    final_positions = positions.masked_fill(~attention_mask, -1).max(dim=1).values
+    batch_indices = adapter._torch.arange(hidden.shape[0], device=hidden.device)
+    return hidden[batch_indices, final_positions]
+
+
+def _label_margins(
+    adapter: HuggingFaceMathModel,
+    hidden,
+    valid_token_ids: list[int],
+    invalid_token_ids: list[int],
+):
+    valid = adapter._torch.as_tensor(valid_token_ids, device=hidden.device)
+    invalid = adapter._torch.as_tensor(invalid_token_ids, device=hidden.device)
+    logits = adapter.model.lm_head(hidden)
+    batch_indices = adapter._torch.arange(hidden.shape[0], device=hidden.device)
+    return logits[batch_indices, invalid] - logits[batch_indices, valid]
+
+
+def _padded_boundaries(
+    adapter: HuggingFaceMathModel,
+    inputs: dict[str, object],
+    boundaries: list[int],
+):
+    result = adapter._torch.as_tensor(boundaries, device=adapter.device)
+    if adapter.tokenizer.padding_side == "left":
+        token_counts = inputs["attention_mask"].sum(dim=1)
+        result = result + inputs["attention_mask"].shape[1] - token_counts
+    return result.long()
 
 
 def balanced_boundary_sample(
@@ -696,9 +806,7 @@ def balanced_boundary_sample(
     groups = []
     used_traces = set()
     for label in (1, 0):
-        candidates = frame[
-            frame["invalid_so_far"].eq(label) & ~frame["trace_id"].isin(used_traces)
-        ]
+        candidates = frame[frame["invalid_so_far"].eq(label) & ~frame["trace_id"].isin(used_traces)]
         candidates = candidates.sample(frac=1, random_state=seed + label).drop_duplicates(
             "trace_id"
         )
@@ -743,13 +851,9 @@ def summarize_verdict_audit(
 ) -> pd.DataFrame:
     rows = []
     for (partition, mapping), group in individual.groupby(["partition", "mapping"]):
-        rows.append(
-            _verdict_summary_row(group, partition, mapping, config)
-        )
+        rows.append(_verdict_summary_row(group, partition, mapping, config))
     for partition, group in counterbalanced.groupby("partition"):
-        rows.append(
-            _verdict_summary_row(group, partition, "counterbalanced", config)
-        )
+        rows.append(_verdict_summary_row(group, partition, "counterbalanced", config))
     return pd.DataFrame(rows)
 
 
@@ -820,9 +924,10 @@ def summarize_causal_interventions(
     for (direction_type, alpha), group in frame.groupby(["direction_type", "alpha"]):
         values = group["delta_margin"].to_numpy(dtype=float)
         means = np.asarray(
-            [rng.choice(values, size=len(values), replace=True).mean() for _ in range(
-                config.analysis.bootstrap_samples
-            )]
+            [
+                rng.choice(values, size=len(values), replace=True).mean()
+                for _ in range(config.analysis.bootstrap_samples)
+            ]
         )
         rows.append(
             {
@@ -835,9 +940,7 @@ def summarize_causal_interventions(
                 "ci_low": np.quantile(means, tail),
                 "ci_high": np.quantile(means, 1 - tail),
                 "signed_consistency": (
-                    float(((values * float(alpha)) > 0).mean())
-                    if alpha != 0
-                    else float("nan")
+                    float(((values * float(alpha)) > 0).mean()) if alpha != 0 else float("nan")
                 ),
             }
         )
@@ -848,14 +951,11 @@ def summarize_gradient_alignment(
     frame: pd.DataFrame,
     config: Experiment2Config,
 ) -> pd.DataFrame:
-    counterbalanced = (
-        frame.groupby(["trace_id", "layer"], as_index=False)
-        .agg(
-            probe_gradient_dot=("probe_gradient_dot", "mean"),
-            probe_gradient_cosine=("probe_gradient_cosine", "mean"),
-            one_sigma_local_derivative=("one_sigma_local_derivative", "mean"),
-            gradient_norm=("gradient_norm", "mean"),
-        )
+    counterbalanced = frame.groupby(["trace_id", "layer"], as_index=False).agg(
+        probe_gradient_dot=("probe_gradient_dot", "mean"),
+        probe_gradient_cosine=("probe_gradient_cosine", "mean"),
+        one_sigma_local_derivative=("one_sigma_local_derivative", "mean"),
+        gradient_norm=("gradient_norm", "mean"),
     )
     rng = np.random.default_rng(config.seed)
     tail = (1 - config.analysis.confidence_level) / 2
@@ -863,9 +963,10 @@ def summarize_gradient_alignment(
     for layer, group in counterbalanced.groupby("layer"):
         values = group["one_sigma_local_derivative"].to_numpy(dtype=float)
         means = np.asarray(
-            [rng.choice(values, len(values), replace=True).mean() for _ in range(
-                config.analysis.bootstrap_samples
-            )]
+            [
+                rng.choice(values, len(values), replace=True).mean()
+                for _ in range(config.analysis.bootstrap_samples)
+            ]
         )
         rows.append(
             {

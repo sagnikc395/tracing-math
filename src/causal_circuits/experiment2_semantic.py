@@ -56,7 +56,14 @@ def extract_semantic_activation_shards(config: Experiment2Config) -> dict[str, i
         arrays = []
         rows = []
         skipped = []
-        shard_traces = traces[start:end]
+        # Similar-length prompts belong in the same batch.  Decoder cost is set by the
+        # longest prompt in a padded batch, so the previous dataset order could make a
+        # short trace pay for almost 2,048 tokens of padding.  Ordering is immaterial to
+        # the trace-grouped analysis, and rows remain paired with their activations.
+        shard_traces = sorted(
+            traces[start:end],
+            key=lambda trace: len(trace.problem) + sum(map(len, trace.steps)),
+        )
         batch_size = config.semantic_extraction.batch_size
         for batch_start in tqdm(
             range(0, len(shard_traces), batch_size),
@@ -140,10 +147,7 @@ def extract_semantic_traces(
             f"Complete semantic-boundary prompt exceeds {adapter.max_length} tokens"
         )
     boundaries_batch = [
-        [
-            semantic_token_before_marker(rendered, marker, offsets)
-            for marker in markers
-        ]
+        [semantic_token_before_marker(rendered, marker, offsets) for marker in markers]
         for rendered, markers, offsets in zip(
             rendered_batch,
             marker_batch,
@@ -159,17 +163,38 @@ def extract_semantic_traces(
             use_cache=False,
             return_dict=True,
         )
-    results = []
-    for batch_index, (boundaries, token_count) in enumerate(
-        zip(boundaries_batch, token_counts, strict=True)
-    ):
-        values = adapter._torch.stack(
-            [
-                hidden[batch_index, boundaries, :].detach().float().cpu()
-                for hidden in output.hidden_states
-            ],
+    # Gather all requested step boundaries on the GPU and transfer them to the CPU once.
+    # The former nested trace/layer loop caused batch_size * n_layers synchronizations.
+    batch_indices = adapter._torch.cat(
+        [
+            adapter._torch.full(
+                (len(boundaries),),
+                batch_index,
+                device=output.hidden_states[0].device,
+                dtype=adapter._torch.long,
+            )
+            for batch_index, boundaries in enumerate(boundaries_batch)
+        ]
+    )
+    boundary_indices = adapter._torch.as_tensor(
+        [boundary for boundaries in boundaries_batch for boundary in boundaries],
+        device=output.hidden_states[0].device,
+        dtype=adapter._torch.long,
+    )
+    gathered = (
+        adapter._torch.stack(
+            [hidden[batch_indices, boundary_indices] for hidden in output.hidden_states],
             dim=1,
-        ).numpy()
+        )
+        .detach()
+        .to(device="cpu", dtype=adapter._torch.float32)
+        .numpy()
+    )
+    split_points = np.cumsum([len(boundaries) for boundaries in boundaries_batch[:-1]])
+    trace_values = np.split(gathered, split_points)
+
+    results = []
+    for values, token_count in zip(trace_values, token_counts, strict=True):
         results.append(
             TraceActivations(values=values.astype(np.float16), token_count=int(token_count))
         )
@@ -188,9 +213,7 @@ def semantic_token_before_marker(
     candidates = [
         index
         for index, (start, end) in enumerate(offsets)
-        if end <= marker_start
-        and end > start
-        and rendered[start:end].strip()
+        if end <= marker_start and end > start and rendered[start:end].strip()
     ]
     if not candidates:
         raise RuntimeError(f"Could not locate a semantic token before {marker!r}")

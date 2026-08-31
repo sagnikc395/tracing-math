@@ -23,6 +23,26 @@ append-only files under `logs/`. The verdict and causal directories also contain
 CSV checkpoints, so partial numerical results can be inspected before the stage finishes. Re-run a
 cell after reconnecting to continue rather than restart it.
 
+### Experiment 2 runtime behavior
+
+The A100 configuration preserves all preregistered traces, layers, counterbalanced mappings,
+intervention doses, bootstrap samples, and decision rules. Runtime reductions come only from
+removing redundant computation:
+
+- semantic-extraction batches are grouped by approximate prompt length within each 100-trace
+  shard, reducing padding, and all requested layer/step states cross from GPU to CPU once per
+  batch;
+- verdict and gradient stages run the decoder directly and project only the final non-padding
+  hidden state, instead of constructing vocabulary logits at every prompt position; and
+- the eight non-zero learned/gradient direction-dose variants for one causal job share a single
+  batched forward pass. The two zero-dose rows reuse the already-computed baseline exactly.
+
+`causal.batch_size: 8` is tuned for the requested A100 runtime. If a smaller GPU runs out of
+memory, lower only this batch size and re-run the cell. Batch size is operational rather than
+scientific, so existing verdict and causal checkpoints remain compatible and completed jobs are
+reused. Do not reduce sample counts, layers, mappings, doses, or bootstrap counts for the final
+study.
+
 ## Experiment 1 paper run
 
 [`experiment.ipynb`](experiment.ipynb) is the single Colab entry point for the experiments in the

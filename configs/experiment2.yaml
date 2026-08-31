@@ -42,5 +42,6 @@ verdict:
 causal:
   examples_per_class: 32
   alphas: [-2.0, -1.0, 0.0, 1.0, 2.0]
-  batch_size: 1
-
+  # Operational only: all eight non-zero direction/dose variants for a prompt fit in one
+  # A100 forward pass. This does not change samples, interventions, or reported results.
+  batch_size: 8

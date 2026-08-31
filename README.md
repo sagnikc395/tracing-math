@@ -15,7 +15,7 @@ submission deadline is **September 2, 2026 at 11:59:59 PM AoE**.
 
 The research question and analysis plan are preregistered, the ProcessBench data has been
 downloaded locally, and the command-line and Colab pipelines are implemented. The unit test suite
-currently passes (15 tests), and Ruff reports no lint errors. However, no activation shards,
+currently passes (32 tests), and the maintained Python sources pass Ruff. However, no activation shards,
 probe results, causal-intervention results, or paper-ready figures are present in the repository
 yet. The paper directory still contains the unedited NeurIPS template.
 
@@ -75,6 +75,17 @@ The detailed day-by-day submission schedule is in
 [Section 16 of experiment.md](experiment.md#16-deadline-schedule).
 
 ## Run the experiment
+
+### Experiment 2 follow-up
+
+The robustness and causally validated follow-up is specified in
+[results/experiment2.md](results/experiment2.md) and runs from
+[notebooks/experiment2.ipynb](notebooks/experiment2.ipynb). It requires the complete Experiment 1
+activation directory on Drive. Its expensive paths are optimized for an A100 without changing the
+analysis: semantic prompts are length-bucketed, only requested boundary/final states are moved or
+projected, and the eight non-zero causal variants for a trace/mapping are evaluated in one batch.
+See [notebooks/README.md](notebooks/README.md#experiment-2-runtime-behavior) for checkpoint and memory
+guidance.
 
 ### Recommended: Colab
 
@@ -201,7 +212,7 @@ fixed configuration, essential tables and directions, intervention outputs, and 
 | --- | --- | --- |
 | `configs/experiment.yaml` | Frozen paper-only configuration | Ready |
 | `src/causal_circuits/` | Data, model, probe, intervention, and plotting code | Implemented |
-| `tests/` | Unit tests for configuration, data, analysis, circuits, and figures | 16 passing |
+| `tests/` | Unit tests for configuration, data, analysis, circuits, and figures | 32 passing |
 | `notebooks/experiment.ipynb` | Fixed Experiments A--C Colab workflow | Ready to run |
 | `experiment.md` | Preregistered hypotheses, decisions, claim table, and schedule | Complete |
 | `paper/` | NeurIPS style, checklist, and manuscript source | Template only |

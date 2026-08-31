@@ -51,7 +51,7 @@ class VerdictAuditConfig:
 class CausalValidationConfig:
     examples_per_class: int = 32
     alphas: tuple[float, ...] = (-2.0, -1.0, 0.0, 1.0, 2.0)
-    batch_size: int = 1
+    batch_size: int = 8
 
 
 @dataclass(frozen=True)
@@ -195,6 +195,6 @@ def _build_config(raw: dict[str, Any]) -> Experiment2Config:
         causal=CausalValidationConfig(
             examples_per_class=int(causal.get("examples_per_class", 32)),
             alphas=tuple(map(float, causal.get("alphas", [-2, -1, 0, 1, 2]))),
-            batch_size=int(causal.get("batch_size", 1)),
+            batch_size=int(causal.get("batch_size", 8)),
         ),
     )

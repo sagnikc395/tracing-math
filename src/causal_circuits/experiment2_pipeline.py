@@ -56,7 +56,12 @@ def write_resolved_config(config: Experiment2Config) -> Path:
 
 
 def experiment2_run_identity(config: Experiment2Config) -> str:
-    payload = json.dumps(_serialize(asdict(config)), sort_keys=True).encode()
+    payload = _serialize(asdict(config))
+    # Batch sizes change scheduling and peak memory, not samples or estimands. Keeping them
+    # out of the durable identity lets run-all reuse completed stages after safe OOM tuning.
+    for section in ("semantic_extraction", "verdict", "causal"):
+        payload[section].pop("batch_size", None)
+    payload = json.dumps(payload, sort_keys=True).encode()
     return hashlib.sha256(payload).hexdigest()
 
 
