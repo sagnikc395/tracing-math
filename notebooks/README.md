@@ -10,6 +10,10 @@ Drive-backed Experiment 1 directory, including activation shards, and writes eve
 MyDrive/math-error-tracing/artifacts/experiment2/
 ```
 
+Before starting, add a fine-grained GitHub token with **Contents: read** permission to Colab
+Secrets as `GITHUB_TOKEN`, then enable notebook access to the secret. Experiment 2 uses the same
+temporary `GIT_ASKPASS` authentication pattern as the Experiment 1 notebook.
+
 The notebook runs stronger within-trace and combined-surface controls, extracts fresh activations
 at natural step-final tokens, audits a counterbalanced single-token verdict, and compares the
 learned intervention direction with a gradient-aligned positive causal control. Its final cell
