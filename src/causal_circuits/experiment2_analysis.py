@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -96,9 +97,8 @@ def run_marker_robustness(config: Experiment2Config) -> dict[str, object]:
     )
     error_only_metrics.append(centered_metrics)
     error_only_predictions.append(centered_predictions)
-    pd.concat(error_only_metrics, ignore_index=True).to_csv(
-        output / "error_only_metrics.csv", index=False
-    )
+    error_only_metric_frame = pd.concat(error_only_metrics, ignore_index=True)
+    error_only_metric_frame.to_csv(output / "error_only_metrics.csv", index=False)
     pd.concat(error_only_predictions, ignore_index=True).to_csv(
         output / "error_only_predictions.csv", index=False
     )
@@ -106,28 +106,67 @@ def run_marker_robustness(config: Experiment2Config) -> dict[str, object]:
     generator_holdout(hidden, metadata, config).to_csv(
         output / "leave_one_generator_out.csv", index=False
     )
+    domain_calibration, direction_cosines = domain_calibration_analysis(
+        hidden,
+        metadata,
+        config,
+    )
+    domain_calibration.to_csv(output / "domain_calibration.csv", index=False)
+    direction_cosines.to_csv(output / "source_direction_cosines.csv", index=False)
     primary_predictions = results.predictions[
         results.predictions["layer"] == results.selected_layer
     ].copy()
-    bootstrap_onset_jump(primary_predictions, config).to_csv(
-        output / "onset_jump_bootstrap.csv", index=False
-    )
+    onset_jump = bootstrap_onset_jump(primary_predictions, config)
+    onset_jump.to_csv(output / "onset_jump_bootstrap.csv", index=False)
     surface_predictions, surface_metrics = fit_surface_metadata_control(metadata, config)
     surface_predictions.to_csv(output / "surface_metadata_predictions.csv", index=False)
     surface_metrics.to_csv(output / "surface_metadata_metrics.csv", index=False)
-    paired_control_comparison(
+    paired_control = paired_control_comparison(
         primary_predictions,
         surface_predictions,
         hidden_threshold=float(results.thresholds[results.selected_layer]),
         surface_threshold=float(surface_metrics.loc[0, "threshold"]),
         config=config,
-    ).to_csv(output / "hidden_vs_surface_paired.csv", index=False)
+    )
+    paired_control.to_csv(output / "hidden_vs_surface_paired.csv", index=False)
+
+    error_lookup = error_only_metric_frame.set_index("variant")
+    control_lookup = paired_control.set_index("metric")
+    decision = {
+        "raw_error_only_decodable": bool(
+            error_lookup.loc["raw_error_traces", "auroc_ci_low"] > 0.5
+        ),
+        "centered_error_only_decodable": bool(
+            error_lookup.loc[
+                "first_step_centered_error_traces", "auroc_ci_low"
+            ]
+            > 0.5
+        ),
+        "positive_onset_jump": bool(onset_jump.loc[0, "ci_low"] > 0),
+        "beats_combined_surface_control": bool(
+            control_lookup.loc["auroc", "ci_low"] > 0
+            and control_lookup.loc["process_f1", "ci_low"] > 0
+        ),
+        "criterion": (
+            "raw and first-step-centered error-only AUROC intervals above 0.5, onset-jump "
+            "interval above zero, and hidden-minus-combined-surface AUROC and Process F1 "
+            "intervals above zero"
+        ),
+    }
+    decision["change_point_supported"] = bool(
+        decision["raw_error_only_decodable"]
+        and decision["centered_error_only_decodable"]
+        and decision["positive_onset_jump"]
+        and decision["beats_combined_surface_control"]
+    )
+    (output / "decision.json").write_text(json.dumps(decision, indent=2))
 
     return {
         "selected_layer": results.selected_layer,
         "frozen_experiment1_layer": frozen_layer,
         "activation_rows": len(metadata),
         "traces": int(metadata["trace_id"].nunique()),
+        **decision,
         "output_dir": str(output),
     }
 
@@ -375,6 +414,133 @@ def bootstrap_onset_jump(
     )
 
 
+def domain_calibration_analysis(
+    hidden: np.ndarray,
+    metadata: pd.DataFrame,
+    config: Experiment2Config,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Separate cross-source ranking transfer from target-threshold calibration."""
+    labels = metadata["invalid_so_far"].to_numpy(dtype=int)
+    sources = sorted(metadata["source"].unique())
+    rows = []
+    directions = {}
+    for train_source in sources:
+        train = metadata["partition"].eq("train") & metadata["source"].eq(train_source)
+        validation_source = metadata["partition"].eq("validation") & metadata["source"].eq(
+            train_source
+        )
+        if any(len(np.unique(labels[mask])) < 2 for mask in (train, validation_source)):
+            continue
+        best_c, validation_scores = _select_c(
+            hidden[train],
+            labels[train],
+            hidden[validation_source],
+            labels[validation_source],
+            config.analysis.c_values,
+            config.analysis.max_iter,
+            config.seed,
+        )
+        source_threshold = choose_threshold(
+            metadata.loc[validation_source],
+            validation_scores,
+            threshold_min=config.analysis.threshold_min,
+            threshold_max=config.analysis.threshold_max,
+            threshold_points=config.analysis.threshold_points,
+        )
+        scaler, classifier = _fit_logistic(
+            hidden[train],
+            labels[train],
+            best_c,
+            config.analysis.max_iter,
+            config.seed,
+        )
+        raw_direction = classifier.coef_[0] / scaler.scale_
+        directions[train_source] = raw_direction / np.linalg.norm(raw_direction)
+        for test_source in sources:
+            target_validation = metadata["partition"].eq("validation") & metadata["source"].eq(
+                test_source
+            )
+            test = metadata["partition"].eq("test") & metadata["source"].eq(test_source)
+            if any(len(np.unique(labels[mask])) < 2 for mask in (target_validation, test)):
+                continue
+            target_validation_scores = classifier.predict_proba(
+                scaler.transform(hidden[target_validation])
+            )[:, 1]
+            target_threshold = choose_threshold(
+                metadata.loc[target_validation],
+                target_validation_scores,
+                threshold_min=config.analysis.threshold_min,
+                threshold_max=config.analysis.threshold_max,
+                threshold_points=config.analysis.threshold_points,
+            )
+            scores = classifier.predict_proba(scaler.transform(hidden[test]))[:, 1]
+            binary = binary_metrics(labels[test], scores, threshold=source_threshold)
+            source_change = change_point_metrics(
+                metadata.loc[test],
+                scores,
+                source_threshold,
+            )
+            target_change = change_point_metrics(
+                metadata.loc[test],
+                scores,
+                target_threshold,
+            )
+            bootstrap_source = group_bootstrap_metrics(
+                metadata.loc[test],
+                labels[test],
+                scores,
+                source_threshold,
+                samples=config.analysis.bootstrap_samples,
+                seed=config.seed,
+            )
+            bootstrap_target = group_bootstrap_metrics(
+                metadata.loc[test],
+                labels[test],
+                scores,
+                target_threshold,
+                samples=config.analysis.bootstrap_samples,
+                seed=config.seed + 1,
+            )
+            tail = (1 - config.analysis.confidence_level) / 2
+            rows.append(
+                {
+                    "train_source": train_source,
+                    "test_source": test_source,
+                    "c_value": best_c,
+                    "source_threshold": source_threshold,
+                    "target_threshold": target_threshold,
+                    "auroc": binary["auroc"],
+                    "auroc_ci_low": bootstrap_source["auroc"].quantile(tail),
+                    "auroc_ci_high": bootstrap_source["auroc"].quantile(1 - tail),
+                    "source_threshold_process_f1": source_change["process_f1"],
+                    "source_process_f1_ci_low": bootstrap_source["process_f1"].quantile(tail),
+                    "source_process_f1_ci_high": bootstrap_source["process_f1"].quantile(
+                        1 - tail
+                    ),
+                    "target_threshold_process_f1": target_change["process_f1"],
+                    "target_process_f1_ci_low": bootstrap_target["process_f1"].quantile(tail),
+                    "target_process_f1_ci_high": bootstrap_target["process_f1"].quantile(
+                        1 - tail
+                    ),
+                    "calibration_gain": (
+                        target_change["process_f1"] - source_change["process_f1"]
+                    ),
+                    "n_test_traces": metadata.loc[test, "trace_id"].nunique(),
+                }
+            )
+    cosine_rows = []
+    for first_source, first_direction in directions.items():
+        for second_source, second_direction in directions.items():
+            cosine_rows.append(
+                {
+                    "source_a": first_source,
+                    "source_b": second_source,
+                    "cosine": float(np.dot(first_direction, second_direction)),
+                }
+            )
+    return pd.DataFrame(rows), pd.DataFrame(cosine_rows)
+
+
 def fit_surface_metadata_control(
     metadata: pd.DataFrame,
     config: Experiment2Config,
@@ -418,9 +584,21 @@ def fit_surface_metadata_control(
         ).fit(features[masks["train"]], labels[masks["train"]])
         scores = classifier.predict_proba(features[masks["validation"]])[:, 1]
         candidates.append(
-            (roc_auc_score(labels[masks["validation"]], scores), -abs(np.log10(c_value)), c_value)
+            (
+                roc_auc_score(labels[masks["validation"]], scores),
+                -abs(np.log10(c_value)),
+                c_value,
+                scores,
+            )
         )
-    _, _, best_c = max(candidates)
+    _, _, best_c, validation_scores = max(candidates, key=lambda item: item[:2])
+    threshold = choose_threshold(
+        metadata.loc[masks["validation"]],
+        validation_scores,
+        threshold_min=config.analysis.threshold_min,
+        threshold_max=config.analysis.threshold_max,
+        threshold_points=config.analysis.threshold_points,
+    )
     fit = masks["train"] | masks["validation"]
     classifier = LogisticRegression(
         C=best_c,
@@ -429,14 +607,6 @@ def fit_surface_metadata_control(
         solver="liblinear",
         random_state=config.seed,
     ).fit(features[fit], labels[fit])
-    validation_scores = classifier.predict_proba(features[masks["validation"]])[:, 1]
-    threshold = choose_threshold(
-        metadata.loc[masks["validation"]],
-        validation_scores,
-        threshold_min=config.analysis.threshold_min,
-        threshold_max=config.analysis.threshold_max,
-        threshold_points=config.analysis.threshold_points,
-    )
     test_scores = classifier.predict_proba(features[masks["test"]])[:, 1]
     test = metadata.loc[masks["test"]].copy()
     predictions = test[

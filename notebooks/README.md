@@ -1,5 +1,23 @@
 # Paper experiment notebook
 
+## Experiment 2 follow-up
+
+[`experiment2.ipynb`](experiment2.ipynb) runs the robustness and causal-validation follow-up
+specified in [`results/experiment2.md`](../results/experiment2.md). It requires the complete
+Drive-backed Experiment 1 directory, including activation shards, and writes every new result to:
+
+```text
+MyDrive/math-error-tracing/artifacts/experiment2/
+```
+
+The notebook runs stronger within-trace and combined-surface controls, extracts fresh activations
+at natural step-final tokens, audits a counterbalanced single-token verdict, and compares the
+learned intervention direction with a gradient-aligned positive causal control. Its final cell
+copies compact tables and figures to the repository's `artifacts/experiment2` while excluding the
+large semantic activation shards. It does not commit or push.
+
+## Experiment 1 paper run
+
 [`experiment.ipynb`](experiment.ipynb) is the single Colab entry point for the experiments in the
 paper. It runs, in order:
 

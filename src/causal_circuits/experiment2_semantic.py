@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from causal_circuits.analysis import fit_layer_probes
+from causal_circuits.analysis import _paired_comparison_bootstrap, fit_layer_probes
+from causal_circuits.config import AnalysisConfig
 from causal_circuits.data import assign_partitions, iter_step_metadata, load_traces
 from causal_circuits.experiment2_analysis import expanded_analysis_configs, save_probe_results
 from causal_circuits.experiment2_config import Experiment2Config
@@ -234,12 +235,93 @@ def fit_semantic_boundary_probes(config: Experiment2Config) -> dict[str, object]
     )
     output = config.output_dir / "semantic_boundary"
     save_probe_results(results, output)
+    source_artifact = np.load(config.experiment1_dir / "probes" / "directions.npz")
+    frozen_layer = int(source_artifact["selected_layer"])
+    semantic_fixed = results.predictions[results.predictions["layer"] == frozen_layer].copy()
+    semantic_fixed.to_csv(output / "fixed_experiment1_layer_predictions.csv", index=False)
+    marker_fixed = pd.read_csv(config.experiment1_dir / "probes" / "test_predictions.csv")
+    marker_threshold = float(source_artifact["thresholds"][frozen_layer])
+    semantic_threshold = float(results.thresholds[frozen_layer])
+    comparison = compare_boundaries(
+        marker_fixed,
+        semantic_fixed,
+        marker_threshold=marker_threshold,
+        semantic_threshold=semantic_threshold,
+        config=config,
+    )
+    comparison.to_csv(output / "semantic_vs_marker_paired.csv", index=False)
+    auroc_low = float(
+        results.bootstrap_summary.loc[
+            results.bootstrap_summary["metric"] == "auroc", "ci_low"
+        ].iloc[0]
+    )
+    delta_lookup = comparison.set_index("metric")
+    marker_invariant = bool(
+        auroc_low > 0.5
+        and delta_lookup.loc["auroc", "ci_low"] > -0.05
+        and delta_lookup.loc["process_f1", "ci_low"] > -0.10
+    )
+    decision = {
+        "semantic_boundary_decodable": auroc_low > 0.5,
+        "marker_invariant": marker_invariant,
+        "criterion": (
+            "selected semantic-boundary AUROC CI is above 0.5; at frozen Experiment 1 layer, "
+            "semantic-minus-marker AUROC CI lower bound exceeds -0.05 and Process F1 lower "
+            "bound exceeds -0.10"
+        ),
+        "selected_semantic_auroc_ci_low": auroc_low,
+    }
+    (output / "decision.json").write_text(json.dumps(decision, indent=2))
     return {
         "selected_layer": results.selected_layer,
+        "frozen_experiment1_layer": frozen_layer,
+        **decision,
         "activation_rows": len(metadata),
         "traces": int(metadata["trace_id"].nunique()),
         "output_dir": str(output),
     }
+
+
+def compare_boundaries(
+    marker: pd.DataFrame,
+    semantic: pd.DataFrame,
+    *,
+    marker_threshold: float,
+    semantic_threshold: float,
+    config: Experiment2Config,
+) -> pd.DataFrame:
+    """Paired whole-trace comparison at the frozen Experiment 1 layer."""
+    merged = marker.merge(
+        semantic[["trace_id", "step_index", "score"]],
+        on=["trace_id", "step_index"],
+        suffixes=("_primary", "_candidate"),
+        validate="one_to_one",
+    )
+    bootstrap = _paired_comparison_bootstrap(
+        merged,
+        marker_threshold,
+        semantic_threshold,
+        AnalysisConfig(
+            confidence_level=config.analysis.confidence_level,
+            localization_tolerances=(0, 1, 2),
+        ),
+        samples=config.analysis.bootstrap_samples,
+        seed=config.seed,
+    )
+    tail = (1 - config.analysis.confidence_level) / 2
+    return pd.DataFrame(
+        [
+            {
+                "metric": metric,
+                "semantic_minus_marker_estimate": values.mean(),
+                "ci_low": values.quantile(tail),
+                "ci_high": values.quantile(1 - tail),
+                "bootstrap_samples": len(values),
+            }
+            for metric in bootstrap
+            if not (values := bootstrap[metric].dropna()).empty
+        ]
+    )
 
 
 def _check_identity(config: Experiment2Config) -> None:
