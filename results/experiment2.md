@@ -320,6 +320,11 @@ require a separately justified smallest effect size of interest.
 ```text
 artifacts/experiment2/
 ├── experiment_config.yaml
+├── stage_status.json                         # attempt counts, timings, and current progress
+├── run_summary.json
+├── logs/
+│   ├── experiment2.log                       # aggregate append-only event log
+│   └── <stage>.log                           # per-command log
 ├── semantic_extraction_identity.json
 ├── semantic_extraction_progress.json
 ├── semantic_activation_shards/             # resumable, not intended for publication
@@ -342,12 +347,19 @@ artifacts/experiment2/
 │   ├── semantic_vs_marker_paired.csv
 │   └── decision.json
 ├── verdict_audit/
+│   ├── checkpoint_identity.json
+│   ├── individual.checkpoint.csv             # atomic, resumable scoring checkpoint
+│   ├── progress.json
 │   ├── individual.csv
 │   ├── counterbalanced.csv
 │   ├── summary.csv
 │   ├── label_tokens.json
 │   └── decision.json
 ├── causal_validation/
+│   ├── checkpoint_identity.json
+│   ├── gradient_alignment.checkpoint.csv     # atomic, one trace/mapping job at a time
+│   ├── interventions.checkpoint.csv
+│   ├── progress.json
 │   ├── gradient_alignment_individual.csv
 │   ├── gradient_alignment_summary.csv
 │   ├── interventions_individual.csv
@@ -377,11 +389,27 @@ python -m causal_circuits.experiment2_cli --config configs/experiment2.yaml caus
 python -m causal_circuits.experiment2_cli --config configs/experiment2.yaml plot
 ```
 
+At any point, print the compact live report without loading model weights or result tables:
+
+```bash
+python -m causal_circuits.experiment2_cli --config configs/experiment2.yaml status
+```
+
 Alternatively:
 
 ```bash
 python -m causal_circuits.experiment2_cli --config configs/experiment2.yaml run-all
 ```
 
-The semantic extraction is resumable at 100-trace shards. Every numerical result and decision file
-is stored under `artifacts/experiment2`; Experiment 1 files are never modified.
+The semantic extraction resumes at 100-trace shards, the verdict audit resumes at completed
+inference batches, and causal validation resumes at completed trace/mapping jobs. Checkpoint files
+are replaced atomically and guarded by dataset/model/config identities, so incompatible partial
+runs are rejected instead of mixed. `run-all` skips stages already marked complete for the same
+resolved configuration; pass global `--force` before `run-all` to re-enter them (stage-local raw
+checkpoints are still reused).
+
+While a run is active, inspect `stage_status.json`, the current stage's `progress.json`, and
+`logs/experiment2.log`. Partial raw results are directly readable from the `*.checkpoint.csv`
+files. Re-running the same command after a disconnect continues from those checkpoints. Every
+numerical result and decision file is stored under `artifacts/experiment2`; Experiment 1 files are
+never modified.

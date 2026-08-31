@@ -16,6 +16,13 @@ learned intervention direction with a gradient-aligned positive causal control. 
 copies compact tables and figures to the repository's `artifacts/experiment2` while excluding the
 large semantic activation shards. It does not commit or push.
 
+All long GPU stages are disconnect-safe. Semantic extraction resumes by shard, verdict scoring by
+completed batch, and causal validation by completed trace/mapping job. During a run, inspect
+`stage_status.json`, `semantic_extraction_progress.json`, the stage-local `progress.json`, and the
+append-only files under `logs/`. The verdict and causal directories also contain readable atomic
+CSV checkpoints, so partial numerical results can be inspected before the stage finishes. Re-run a
+cell after reconnecting to continue rather than restart it.
+
 ## Experiment 1 paper run
 
 [`experiment.ipynb`](experiment.ipynb) is the single Colab entry point for the experiments in the

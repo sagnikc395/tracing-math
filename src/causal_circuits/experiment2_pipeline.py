@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -13,6 +14,7 @@ import yaml
 from causal_circuits.experiment2_analysis import run_marker_robustness
 from causal_circuits.experiment2_causal import audit_verdict_readout, run_causal_validation
 from causal_circuits.experiment2_config import Experiment2Config
+from causal_circuits.experiment2_runtime import atomic_write_json, atomic_write_text, run_stage
 from causal_circuits.experiment2_semantic import (
     extract_semantic_activation_shards,
     fit_semantic_boundary_probes,
@@ -49,22 +51,41 @@ def write_resolved_config(config: Experiment2Config) -> Path:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     payload = _serialize(asdict(config))
     path = config.output_dir / "experiment_config.yaml"
-    path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    atomic_write_text(path, yaml.safe_dump(payload, sort_keys=False))
     return path
 
 
-def run_all_experiment2(config: Experiment2Config) -> dict[str, object]:
-    validate_experiment2_inputs(config)
+def experiment2_run_identity(config: Experiment2Config) -> str:
+    payload = json.dumps(_serialize(asdict(config)), sort_keys=True).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def run_all_experiment2(
+    config: Experiment2Config,
+    *,
+    force: bool = False,
+) -> dict[str, object]:
     write_resolved_config(config)
-    results = {
-        "marker_robustness": run_marker_robustness(config),
-        "semantic_extraction": extract_semantic_activation_shards(config),
-        "semantic_boundary": fit_semantic_boundary_probes(config),
-        "verdict_audit": audit_verdict_readout(config),
-        "causal_validation": run_causal_validation(config),
-    }
-    results["figures"] = [str(path) for path in plot_experiment2(config)]
-    (config.output_dir / "run_summary.json").write_text(json.dumps(results, indent=2))
+    identity = experiment2_run_identity(config)
+    stages = (
+        ("validate-config", lambda: validate_experiment2_inputs(config)),
+        ("analyze-robustness", lambda: run_marker_robustness(config)),
+        ("extract-semantic", lambda: extract_semantic_activation_shards(config)),
+        ("fit-semantic", lambda: fit_semantic_boundary_probes(config)),
+        ("audit-verdict", lambda: audit_verdict_readout(config)),
+        ("causal-validation", lambda: run_causal_validation(config)),
+        ("plot", lambda: [str(path) for path in plot_experiment2(config)]),
+    )
+    results = {}
+    for name, operation in stages:
+        results[name] = run_stage(
+            config.output_dir,
+            name,
+            operation,
+            skip_completed=not force,
+            identity=identity,
+        )
+    atomic_write_json(config.output_dir / "run_summary.json", results)
     return results
 
 

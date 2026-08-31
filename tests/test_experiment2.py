@@ -11,12 +11,19 @@ from causal_circuits.experiment2_analysis import (
     fit_surface_metadata_control,
 )
 from causal_circuits.experiment2_causal import (
+    _completed_causal_jobs,
+    _deduplicate_causal_rows,
     balanced_boundary_sample,
     counterbalance_interventions,
     counterbalance_verdict_rows,
     verdict_mappings,
 )
 from causal_circuits.experiment2_config import Experiment2Config
+from causal_circuits.experiment2_runtime import (
+    ensure_checkpoint_identity,
+    run_stage,
+    stage_status,
+)
 from causal_circuits.experiment2_semantic import semantic_token_before_marker
 
 
@@ -98,6 +105,79 @@ def test_counterbalance_interventions_averages_mappings() -> None:
     result = counterbalance_interventions(frame)
     assert result.loc[0, "margin"] == pytest.approx(0.4)
     assert result.loc[0, "delta_margin"] == pytest.approx(0.2)
+
+
+def test_causal_checkpoint_jobs_resume_only_complete_pairs() -> None:
+    alignment = pd.DataFrame(
+        [
+            {"trace_id": "a", "step_index": 1, "mapping": "fixed", "layer": layer}
+            for layer in range(3)
+        ]
+    )
+    interventions = pd.DataFrame(
+        [
+            {
+                "trace_id": "a",
+                "step_index": 1,
+                "mapping": "fixed",
+                "direction_type": direction,
+                "layer": 2,
+                "alpha": alpha,
+            }
+            for direction in ("learned_probe", "gradient_positive_control")
+            for alpha in (-1.0, 0.0, 1.0)
+        ]
+    )
+    assert _completed_causal_jobs(alignment) & _completed_causal_jobs(interventions) == {
+        ("a", 1, "fixed")
+    }
+    duplicated = pd.concat([interventions, interventions.iloc[[0]]], ignore_index=True)
+    assert len(_deduplicate_causal_rows(duplicated, alignment=False)) == len(interventions)
+
+
+def test_stage_status_skips_only_matching_completed_identity(tmp_path) -> None:
+    calls = []
+
+    def operation():
+        calls.append("called")
+        return {"value": len(calls)}
+
+    assert run_stage(tmp_path, "stage", operation, identity="one") == {"value": 1}
+    assert run_stage(
+        tmp_path,
+        "stage",
+        operation,
+        skip_completed=True,
+        identity="one",
+    ) == {"value": 1}
+    assert calls == ["called"]
+    assert run_stage(
+        tmp_path,
+        "stage",
+        operation,
+        skip_completed=True,
+        identity="two",
+    ) == {"value": 2}
+    assert stage_status(tmp_path)["stages"]["stage"]["status"] == "complete"
+
+
+def test_stage_status_records_failure_and_checkpoint_identity_is_guarded(tmp_path) -> None:
+    with pytest.raises(RuntimeError, match="boom"):
+        run_stage(
+            tmp_path,
+            "failing",
+            lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+            identity="run",
+        )
+    failed = stage_status(tmp_path)["stages"]["failing"]
+    assert failed["status"] == "failed"
+    assert failed["error"] == {"type": "RuntimeError", "message": "boom"}
+
+    identity_path = tmp_path / "checkpoint_identity.json"
+    ensure_checkpoint_identity(identity_path, {"model": "a", "labels": ("A", "B")})
+    ensure_checkpoint_identity(identity_path, {"model": "a", "labels": ("A", "B")})
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        ensure_checkpoint_identity(identity_path, {"model": "b"})
 
 
 def test_balanced_boundary_sample_uses_distinct_traces() -> None:

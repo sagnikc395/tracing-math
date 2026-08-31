@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy.special import expit
+from tqdm.auto import tqdm
 
 from causal_circuits.analysis import binary_metrics
 from causal_circuits.data import (
@@ -16,6 +18,14 @@ from causal_circuits.data import (
     load_traces,
 )
 from causal_circuits.experiment2_config import Experiment2Config
+from causal_circuits.experiment2_runtime import (
+    atomic_save_csv,
+    atomic_write_json,
+    ensure_checkpoint_identity,
+    sha256_file,
+    update_stage_progress,
+    write_progress,
+)
 from causal_circuits.models import HuggingFaceMathModel, TraceTooLongError
 
 SINGLE_TOKEN_SYSTEM_PROMPT = (
@@ -26,21 +36,20 @@ SINGLE_TOKEN_SYSTEM_PROMPT = (
 
 def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
     """Audit a single-token verdict under fixed and reversed A/B mappings."""
+    output = config.output_dir / "verdict_audit"
+    output.mkdir(parents=True, exist_ok=True)
+    ensure_checkpoint_identity(
+        output / "checkpoint_identity.json",
+        _causal_checkpoint_identity(config, "verdict_audit"),
+    )
     metadata = load_experiment1_metadata(config.experiment1_dir)
     traces_before_context_filter = metadata["trace_id"].nunique()
     metadata = metadata[metadata["token_count"] <= config.model.max_length - 64].copy()
     traces_after_context_filter = metadata["trace_id"].nunique()
     traces = load_traces(config.data.path)
     trace_lookup = {trace.trace_id: trace for trace in traces}
-    adapter = HuggingFaceMathModel(
-        config.model.name,
-        device=config.model.device,
-        dtype=config.model.dtype,
-        max_length=config.model.max_length,
-    )
-    token_ids, token_text = resolve_single_token_labels(adapter, config.verdict.labels)
     mappings = verdict_mappings(config.verdict.labels)
-    rows = []
+    samples = []
     for partition, per_class in (
         ("validation", config.verdict.examples_per_class_validation),
         ("test", config.verdict.examples_per_class_test),
@@ -51,9 +60,43 @@ def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
             per_class=per_class,
             seed=config.seed + (0 if partition == "validation" else 100),
         )
+        samples.append((partition, sample))
+
+    checkpoint_path = output / "individual.checkpoint.csv"
+    if checkpoint_path.exists():
+        individual = pd.read_csv(checkpoint_path)
+    else:
+        individual = pd.DataFrame()
+    rows = individual.to_dict("records")
+    completed = {
+        _verdict_job_key(row)
+        for row in rows
+    }
+    total_jobs = sum(len(sample) * len(mappings) for _, sample in samples)
+    write_progress(
+        output / "progress.json",
+        completed=len(completed),
+        total=total_jobs,
+        rows=len(rows),
+        resumed_rows=len(rows),
+    )
+
+    adapter = HuggingFaceMathModel(
+        config.model.name,
+        device=config.model.device,
+        dtype=config.model.dtype,
+        max_length=config.model.max_length,
+    )
+    token_ids, token_text = resolve_single_token_labels(adapter, config.verdict.labels)
+    for partition, sample in samples:
         for mapping_name, valid_label, invalid_label in mappings:
             prompts = []
-            sample_rows = list(sample.itertuples(index=False))
+            sample_rows = [
+                row
+                for row in sample.itertuples(index=False)
+                if (partition, str(row.trace_id), int(row.step_index), mapping_name)
+                not in completed
+            ]
             for row in sample_rows:
                 trace = trace_lookup[str(row.trace_id)]
                 prompt, _ = render_single_token_verdict(
@@ -64,55 +107,74 @@ def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
                     invalid_label=invalid_label,
                 )
                 prompts.append(prompt)
-            scored = score_next_token_margins(
-                adapter,
-                prompts,
-                valid_token_id=token_ids[valid_label],
-                invalid_token_id=token_ids[invalid_label],
-                batch_size=config.verdict.batch_size,
-            )
-            for row, result in zip(sample_rows, scored, strict=True):
-                label = int(row.invalid_so_far)
-                rows.append(
-                    {
-                        "partition": partition,
-                        "trace_id": str(row.trace_id),
-                        "source": str(row.source),
-                        "generator": str(row.generator),
-                        "step_index": int(row.step_index),
-                        "first_error": int(row.first_error),
-                        "invalid_so_far": label,
-                        "mapping": mapping_name,
-                        "valid_label": valid_label,
-                        "invalid_label": invalid_label,
-                        "margin": result["margin"],
-                        "probability_invalid": float(expit(result["margin"])),
-                        "margin_prediction_correct": int(
-                            (result["margin"] >= 0) == bool(label)
-                        ),
-                        "greedy_token_id": result["greedy_token_id"],
-                        "greedy_matches_expected": int(
-                            result["greedy_token_id"]
-                            == token_ids[invalid_label if label else valid_label]
-                        ),
-                    }
+            for start in tqdm(
+                range(0, len(prompts), config.verdict.batch_size),
+                desc=f"verdict {partition}/{mapping_name}",
+                leave=False,
+            ):
+                batch_rows = sample_rows[start : start + config.verdict.batch_size]
+                scored = score_next_token_margins(
+                    adapter,
+                    prompts[start : start + config.verdict.batch_size],
+                    valid_token_id=token_ids[valid_label],
+                    invalid_token_id=token_ids[invalid_label],
+                    batch_size=config.verdict.batch_size,
+                )
+                for row, result in zip(batch_rows, scored, strict=True):
+                    label = int(row.invalid_so_far)
+                    rows.append(
+                        {
+                            "partition": partition,
+                            "trace_id": str(row.trace_id),
+                            "source": str(row.source),
+                            "generator": str(row.generator),
+                            "step_index": int(row.step_index),
+                            "first_error": int(row.first_error),
+                            "invalid_so_far": label,
+                            "mapping": mapping_name,
+                            "valid_label": valid_label,
+                            "invalid_label": invalid_label,
+                            "margin": result["margin"],
+                            "probability_invalid": float(expit(result["margin"])),
+                            "margin_prediction_correct": int(
+                                (result["margin"] >= 0) == bool(label)
+                            ),
+                            "greedy_token_id": result["greedy_token_id"],
+                            "greedy_matches_expected": int(
+                                result["greedy_token_id"]
+                                == token_ids[invalid_label if label else valid_label]
+                            ),
+                        }
+                    )
+                individual = pd.DataFrame(rows)
+                atomic_save_csv(checkpoint_path, individual)
+                completed.update(_verdict_job_key(row) for row in rows)
+                write_progress(
+                    output / "progress.json",
+                    completed=len(completed),
+                    total=total_jobs,
+                    rows=len(individual),
+                    resumed_rows=len(rows) - len(batch_rows),
+                )
+                update_stage_progress(
+                    config.output_dir,
+                    "audit-verdict",
+                    units_completed=len(completed),
+                    units_total=total_jobs,
+                    rows_checkpointed=len(individual),
                 )
     individual = pd.DataFrame(rows)
     counterbalanced = counterbalance_verdict_rows(individual)
     summary = summarize_verdict_audit(individual, counterbalanced, config)
-    output = config.output_dir / "verdict_audit"
-    output.mkdir(parents=True, exist_ok=True)
-    individual.to_csv(output / "individual.csv", index=False)
-    counterbalanced.to_csv(output / "counterbalanced.csv", index=False)
-    summary.to_csv(output / "summary.csv", index=False)
-    (output / "label_tokens.json").write_text(
-        json.dumps(
-            {
-                label: {"token_id": token_ids[label], "token_text": token_text[label]}
-                for label in config.verdict.labels
-            },
-            indent=2,
-        )
+    atomic_save_csv(output / "individual.csv", individual)
+    atomic_save_csv(output / "counterbalanced.csv", counterbalanced)
+    atomic_save_csv(output / "summary.csv", summary)
+    atomic_write_json(
+        output / "label_tokens.json",
+        {
+            label: {"token_id": token_ids[label], "token_text": token_text[label]}
+            for label in config.verdict.labels
+        },
     )
     validation = summary[
         (summary["partition"] == "validation")
@@ -139,7 +201,14 @@ def audit_verdict_readout(config: Experiment2Config) -> dict[str, object]:
             traces_before_context_filter - traces_after_context_filter
         ),
     }
-    (output / "decision.json").write_text(json.dumps(decision, indent=2))
+    atomic_write_json(output / "decision.json", decision)
+    write_progress(
+        output / "progress.json",
+        completed=total_jobs,
+        total=total_jobs,
+        rows=len(individual),
+        status="complete",
+    )
     return {
         **decision,
         "rows": len(individual),
@@ -168,6 +237,49 @@ def run_causal_validation(config: Experiment2Config) -> dict[str, object]:
     selected_direction = directions[selected_layer]
     selected_scale = float(projection_stds[selected_layer])
 
+    output = config.output_dir / "causal_validation"
+    output.mkdir(parents=True, exist_ok=True)
+    ensure_checkpoint_identity(
+        output / "checkpoint_identity.json",
+        _causal_checkpoint_identity(
+            config,
+            "causal_validation",
+            directions_sha256=sha256_file(
+                config.experiment1_dir / "probes" / "directions.npz"
+            ),
+            selected_layer=selected_layer,
+        ),
+    )
+    alignment_checkpoint = output / "gradient_alignment.checkpoint.csv"
+    intervention_checkpoint = output / "interventions.checkpoint.csv"
+    alignment = (
+        pd.read_csv(alignment_checkpoint)
+        if alignment_checkpoint.exists()
+        else pd.DataFrame()
+    )
+    interventions = (
+        pd.read_csv(intervention_checkpoint)
+        if intervention_checkpoint.exists()
+        else pd.DataFrame()
+    )
+    alignment_rows = alignment.to_dict("records")
+    intervention_rows = interventions.to_dict("records")
+    initially_completed = _completed_causal_jobs(alignment) & _completed_causal_jobs(
+        interventions
+    )
+    completed = set(initially_completed)
+    mappings = verdict_mappings(config.verdict.labels)
+    total_jobs = len(sample) * len(mappings)
+    write_progress(
+        output / "progress.json",
+        completed=len(completed),
+        total=total_jobs,
+        rows=len(alignment) + len(interventions),
+        alignment_rows=len(alignment),
+        intervention_rows=len(interventions),
+        resumed_jobs=len(initially_completed),
+    )
+
     adapter = HuggingFaceMathModel(
         config.model.name,
         device=config.model.device,
@@ -175,95 +287,125 @@ def run_causal_validation(config: Experiment2Config) -> dict[str, object]:
         max_length=config.model.max_length,
     )
     token_ids, _ = resolve_single_token_labels(adapter, config.verdict.labels)
-    mappings = verdict_mappings(config.verdict.labels)
-    alignment_rows = []
-    intervention_rows = []
-    for row in sample.itertuples(index=False):
+    jobs = [
+        (row, mapping_name, valid_label, invalid_label)
+        for row in sample.itertuples(index=False)
+        for mapping_name, valid_label, invalid_label in mappings
+    ]
+    for row, mapping_name, valid_label, invalid_label in tqdm(
+        jobs,
+        desc="causal validation jobs",
+    ):
+        job_key = (str(row.trace_id), int(row.step_index), mapping_name)
+        if job_key in completed:
+            continue
         trace = trace_lookup[str(row.trace_id)]
-        for mapping_name, valid_label, invalid_label in mappings:
-            prompt, boundary = render_single_token_verdict(
-                adapter,
-                trace,
-                int(row.step_index),
-                valid_label=valid_label,
-                invalid_label=invalid_label,
+        prompt, boundary = render_single_token_verdict(
+            adapter,
+            trace,
+            int(row.step_index),
+            valid_label=valid_label,
+            invalid_label=invalid_label,
+        )
+        baseline, gradients = gradients_at_boundary(
+            adapter,
+            prompt,
+            boundary,
+            valid_token_id=token_ids[valid_label],
+            invalid_token_id=token_ids[invalid_label],
+        )
+        for layer, gradient in enumerate(gradients):
+            direction = directions[layer]
+            gradient_norm = float(np.linalg.norm(gradient))
+            direction_norm = float(np.linalg.norm(direction))
+            dot = float(np.dot(gradient, direction))
+            denominator = max(gradient_norm * direction_norm, 1e-12)
+            alignment_rows.append(
+                {
+                    "trace_id": str(row.trace_id),
+                    "source": str(row.source),
+                    "step_index": int(row.step_index),
+                    "invalid_so_far": int(row.invalid_so_far),
+                    "mapping": mapping_name,
+                    "layer": layer,
+                    "gradient_norm": gradient_norm,
+                    "probe_gradient_dot": dot,
+                    "probe_gradient_cosine": dot / denominator,
+                    "one_sigma_local_derivative": dot * float(projection_stds[layer]),
+                }
             )
-            baseline, gradients = gradients_at_boundary(
-                adapter,
-                prompt,
-                boundary,
-                valid_token_id=token_ids[valid_label],
-                invalid_token_id=token_ids[invalid_label],
-            )
-            for layer, gradient in enumerate(gradients):
-                direction = directions[layer]
-                gradient_norm = float(np.linalg.norm(gradient))
-                direction_norm = float(np.linalg.norm(direction))
-                dot = float(np.dot(gradient, direction))
-                denominator = max(gradient_norm * direction_norm, 1e-12)
-                alignment_rows.append(
+        selected_gradient = gradients[selected_layer].copy()
+        selected_gradient /= max(float(np.linalg.norm(selected_gradient)), 1e-12)
+        for direction_type, direction in (
+            ("learned_probe", selected_direction),
+            ("gradient_positive_control", selected_gradient),
+        ):
+            for alpha in config.causal.alphas:
+                if alpha == 0:
+                    margin = baseline
+                else:
+                    margin, _ = intervened_next_token_margin(
+                        adapter,
+                        prompt,
+                        boundary,
+                        layer=selected_layer,
+                        direction=direction,
+                        magnitude=float(alpha) * selected_scale,
+                        valid_token_id=token_ids[valid_label],
+                        invalid_token_id=token_ids[invalid_label],
+                    )
+                intervention_rows.append(
                     {
                         "trace_id": str(row.trace_id),
                         "source": str(row.source),
+                        "generator": str(row.generator),
                         "step_index": int(row.step_index),
+                        "first_error": int(row.first_error),
                         "invalid_so_far": int(row.invalid_so_far),
                         "mapping": mapping_name,
-                        "layer": layer,
-                        "gradient_norm": gradient_norm,
-                        "probe_gradient_dot": dot,
-                        "probe_gradient_cosine": dot / denominator,
-                        "one_sigma_local_derivative": dot * float(projection_stds[layer]),
+                        "direction_type": direction_type,
+                        "layer": selected_layer,
+                        "alpha": float(alpha),
+                        "margin": margin,
+                        "baseline_margin": baseline,
+                        "delta_margin": margin - baseline,
                     }
                 )
-            selected_gradient = gradients[selected_layer]
-            selected_gradient /= max(float(np.linalg.norm(selected_gradient)), 1e-12)
-            for direction_type, direction in (
-                ("learned_probe", selected_direction),
-                ("gradient_positive_control", selected_gradient),
-            ):
-                for alpha in config.causal.alphas:
-                    if alpha == 0:
-                        margin = baseline
-                    else:
-                        margin, _ = intervened_next_token_margin(
-                            adapter,
-                            prompt,
-                            boundary,
-                            layer=selected_layer,
-                            direction=direction,
-                            magnitude=float(alpha) * selected_scale,
-                            valid_token_id=token_ids[valid_label],
-                            invalid_token_id=token_ids[invalid_label],
-                        )
-                    intervention_rows.append(
-                        {
-                            "trace_id": str(row.trace_id),
-                            "source": str(row.source),
-                            "generator": str(row.generator),
-                            "step_index": int(row.step_index),
-                            "first_error": int(row.first_error),
-                            "invalid_so_far": int(row.invalid_so_far),
-                            "mapping": mapping_name,
-                            "direction_type": direction_type,
-                            "layer": selected_layer,
-                            "alpha": float(alpha),
-                            "margin": margin,
-                            "baseline_margin": baseline,
-                            "delta_margin": margin - baseline,
-                        }
-                    )
+        alignment = _deduplicate_causal_rows(pd.DataFrame(alignment_rows), alignment=True)
+        interventions = _deduplicate_causal_rows(
+            pd.DataFrame(intervention_rows), alignment=False
+        )
+        alignment_rows = alignment.to_dict("records")
+        intervention_rows = interventions.to_dict("records")
+        atomic_save_csv(alignment_checkpoint, alignment)
+        atomic_save_csv(intervention_checkpoint, interventions)
+        completed.add(job_key)
+        write_progress(
+            output / "progress.json",
+            completed=len(completed),
+            total=total_jobs,
+            rows=len(alignment) + len(interventions),
+            alignment_rows=len(alignment),
+            intervention_rows=len(interventions),
+            resumed_jobs=len(initially_completed),
+        )
+        update_stage_progress(
+            config.output_dir,
+            "causal-validation",
+            units_completed=len(completed),
+            units_total=total_jobs,
+            rows_checkpointed=len(alignment) + len(interventions),
+        )
     alignment = pd.DataFrame(alignment_rows)
     interventions = pd.DataFrame(intervention_rows)
     counterbalanced = counterbalance_interventions(interventions)
     intervention_summary = summarize_causal_interventions(counterbalanced, config)
     alignment_summary = summarize_gradient_alignment(alignment, config)
-    output = config.output_dir / "causal_validation"
-    output.mkdir(parents=True, exist_ok=True)
-    alignment.to_csv(output / "gradient_alignment_individual.csv", index=False)
-    alignment_summary.to_csv(output / "gradient_alignment_summary.csv", index=False)
-    interventions.to_csv(output / "interventions_individual.csv", index=False)
-    counterbalanced.to_csv(output / "interventions_counterbalanced.csv", index=False)
-    intervention_summary.to_csv(output / "intervention_summary.csv", index=False)
+    atomic_save_csv(output / "gradient_alignment_individual.csv", alignment)
+    atomic_save_csv(output / "gradient_alignment_summary.csv", alignment_summary)
+    atomic_save_csv(output / "interventions_individual.csv", interventions)
+    atomic_save_csv(output / "interventions_counterbalanced.csv", counterbalanced)
+    atomic_save_csv(output / "intervention_summary.csv", intervention_summary)
 
     readout_decision_path = config.output_dir / "verdict_audit" / "decision.json"
     readout_decision = (
@@ -297,8 +439,60 @@ def run_causal_validation(config: Experiment2Config) -> dict[str, object]:
             traces_before_context_filter - traces_after_context_filter
         ),
     }
-    (output / "decision.json").write_text(json.dumps(decision, indent=2))
+    atomic_write_json(output / "decision.json", decision)
+    write_progress(
+        output / "progress.json",
+        completed=total_jobs,
+        total=total_jobs,
+        rows=len(alignment) + len(interventions),
+        status="complete",
+        alignment_rows=len(alignment),
+        intervention_rows=len(interventions),
+    )
     return {**decision, "output_dir": str(output)}
+
+
+def _causal_checkpoint_identity(
+    config: Experiment2Config,
+    stage: str,
+    **extra: object,
+) -> dict[str, object]:
+    stage_config = config.verdict if stage == "verdict_audit" else config.causal
+    return {
+        "schema_version": 1,
+        "stage": stage,
+        "dataset_sha256": sha256_file(config.data.path),
+        "model": asdict(config.model),
+        "seed": config.seed,
+        "stage_config": asdict(stage_config),
+        "verdict_labels": list(config.verdict.labels),
+        **extra,
+    }
+
+
+def _verdict_job_key(row: dict[str, object]) -> tuple[str, str, int, str]:
+    return (
+        str(row["partition"]),
+        str(row["trace_id"]),
+        int(row["step_index"]),
+        str(row["mapping"]),
+    )
+
+
+def _completed_causal_jobs(frame: pd.DataFrame) -> set[tuple[str, int, str]]:
+    columns = ["trace_id", "step_index", "mapping"]
+    if frame.empty or not set(columns).issubset(frame.columns):
+        return set()
+    return {
+        (str(row.trace_id), int(row.step_index), str(row.mapping))
+        for row in frame[columns].drop_duplicates().itertuples(index=False)
+    }
+
+
+def _deduplicate_causal_rows(frame: pd.DataFrame, *, alignment: bool) -> pd.DataFrame:
+    keys = ["trace_id", "step_index", "mapping"]
+    keys += ["layer"] if alignment else ["direction_type", "layer", "alpha"]
+    return frame.drop_duplicates(keys, keep="last").reset_index(drop=True)
 
 
 def verdict_mappings(labels: tuple[str, str]) -> list[tuple[str, str, str]]:

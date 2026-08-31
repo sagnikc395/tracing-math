@@ -16,6 +16,7 @@ from causal_circuits.config import AnalysisConfig
 from causal_circuits.data import assign_partitions, iter_step_metadata, load_traces
 from causal_circuits.experiment2_analysis import expanded_analysis_configs, save_probe_results
 from causal_circuits.experiment2_config import Experiment2Config
+from causal_circuits.experiment2_runtime import update_stage_progress, utc_now
 from causal_circuits.models import HuggingFaceMathModel, TraceActivations, TraceTooLongError
 
 
@@ -364,11 +365,19 @@ def _write_progress(
         "traces_total": trace_count,
         "traces_completed": completed,
         "fraction_complete": completed / trace_count if trace_count else 1.0,
+        "updated_at": utc_now(),
         **totals,
     }
     _atomic_write_text(
         output_dir / "semantic_extraction_progress.json",
         json.dumps(payload, indent=2),
+    )
+    update_stage_progress(
+        output_dir,
+        "extract-semantic",
+        units_completed=completed,
+        units_total=trace_count,
+        fraction_complete=payload["fraction_complete"],
     )
 
 
