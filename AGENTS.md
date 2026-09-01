@@ -2,9 +2,9 @@
 
 ## Project structure and module organization
 
-The installable Python package lives in `src/causal_circuits/`. Shared Experiment 1 code is split across `data.py`, `models.py`, `analysis.py`, `circuits.py`, and `pipeline.py`; Experiment 2 modules use the `experiment2_` prefix. Keep command-line wiring in `cli.py` or `experiment2_cli.py`. Tests mirror these areas under `tests/` as `test_<module>.py`.
+The installable Python package lives in `src/causal_circuits/`. Experiment 1 code is split across `data.py`, `models.py`, `analysis.py`, `circuits.py`, and `pipeline.py`. The post-hoc CPU analysis lives in `cpu_followup.py`. Keep command-line wiring in `cli.py` or `cpu_followup_cli.py`. Tests mirror these areas under `tests/` as `test_<module>.py`.
 
-Scientific settings belong in `configs/`. Use `experiment2_fast.yaml` only for iteration; publication runs use `experiment2.yaml`. Notebooks contain the A100/Google Drive workflows, `results/` holds written findings, and `paper/` contains the LaTeX manuscript and figures. Generated datasets, activation shards, and run outputs belong in `data/processed/` or `artifacts/`, not Git.
+Scientific settings belong in `configs/`. The CPU follow-up uses `experiment2_cpu.yaml` and reads frozen Experiment 1 outputs. Notebooks contain the A100/Google Drive workflow, `results/` holds written findings, and `paper/` contains the LaTeX manuscript and figures. Generated datasets, activation shards, and run outputs belong in `data/processed/` or `artifacts/`, not Git.
 
 ## Build, test, and development commands
 
@@ -20,10 +20,9 @@ The first command creates the development environment; the others run the full t
 
 ```bash
 uv run math-error-tracing --config configs/experiment.yaml validate-config
-uv run math-error-experiment2 --config configs/experiment2_fast.yaml status
 ```
 
-Both CLIs also provide `run-all`, but full runs require model downloads, substantial storage, and suitable GPU memory.
+The Experiment 1 CLI also provides `run-all`, but a full run requires model downloads, substantial storage, and suitable GPU memory. The CPU follow-up runs with `uv run math-error-cpu-followup --config configs/experiment2_cpu.yaml`; it does not load the model or activation shards.
 
 ## Coding style and naming conventions
 

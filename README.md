@@ -11,28 +11,25 @@ workshop.
 
 ## Current status — August 31, 2026
 
-**Experiment 1 is complete. Experiment 2 is implemented and preregistered, with results pending.**
+**Experiment 1 and the CPU-only post-hoc follow-up are complete.**
 
 The Experiment 1 analysis, compact result package, three paper figures, detailed result report, and
-compiled manuscript are complete. Experiment 2 adds stronger shortcut controls, natural step-end
-representations, a counterbalanced single-token verdict, gradient alignment, and a positive causal
-control. Its full and fast-preview configurations, resumable pipeline, tests, and Colab workflow
-are ready, but no `artifacts/experiment2` result directory is present yet.
+compiled manuscript are complete. The follow-up reuses frozen Experiment 1 predictions and causal
+outputs. It tests temporal randomization, error-aligned trajectories, matched placebo onsets,
+within-trace discrimination, subgroup outcomes, causal-assay sensitivity, and sampled failure cases.
+It does not load the language model or extract new activations.
 
 | Component | State |
 | --- | --- |
 | Experiment 1 data, extraction, probes, controls, and interventions | Complete |
 | Experiment 1 report and frozen result tables | Complete |
 | NeurIPS manuscript, PDF, and three figures | Complete |
-| Experiment 2 design and decision rules | Frozen before results |
-| Experiment 2 implementation and resumable Colab workflow | Complete |
-| Experiment 2 A100 run and result interpretation | Pending |
-| Tests | 32 passing |
-| Ruff on maintained Python sources and tests | Passing |
+| CPU-only follow-up implementation | Complete |
+| CPU-only follow-up run and interpretation | Complete |
 
 The compiled PDF is [paper/neurips_2026.pdf](paper/neurips_2026.pdf). The full Experiment 1 report
-is [results/experiment1.md](results/experiment1.md), and the preregistered Experiment 2 design is
-[results/experiment2.md](results/experiment2.md).
+is [results/experiment1.md](results/experiment1.md), and the CPU follow-up report is
+[results/experiment2_cpu.md](results/experiment2_cpu.md).
 
 ## Experiment 1 results
 
@@ -87,25 +84,26 @@ Experiment 1 therefore establishes decodability, partial localization, and cross
 transfer, but it does not establish that the decoded direction participates in a functioning native
 verdict mechanism.
 
-## Experiment 2 follow-up
+## CPU-only follow-up
 
-Experiment 2 is designed to resolve the main ambiguities left by Experiment 1 without changing its
-confirmatory result. It has four stages:
+The post-hoc follow-up asks whether the frozen Experiment 1 score trajectories contain temporal
+information beyond trace-level offsets and ordinary within-trace drift. It also reports subgroup
+outcomes and checks whether the failed causal assay could have detected effects of plausible size.
+All resampling uses a fixed seed and trace-level bootstrap or permutation units.
 
-1. **Stronger predictive robustness:** error-only and first-step-centered probes, onset-jump tests,
-   combined surface/metadata controls, generator holdouts, subgroup analyses, calibration, and
-   source-direction geometry.
-2. **Natural step-end replication:** fresh activations from the last non-whitespace token of each
-   written step, before the artificial end marker is visible.
-3. **Counterbalanced verdict audit:** single-token `A`/`B` verdict labels under fixed and reversed
-   semantic mappings, averaged to cancel stable token preference.
-4. **Causal validation:** layer-wise alignment with local verdict gradients, learned-direction
-   interventions, and gradient-aligned positive-control interventions at matched token, layer,
-   norm, and dose.
+The analysis reads the compact Experiment 1 predictions, threshold, intervention table, and the
+processed ProcessBench JSONL. It writes to `artifacts/experiment2_cpu` and leaves the frozen inputs
+unchanged. Because this analysis was designed after Experiment 1, its results are post-hoc rather
+than confirmatory.
 
-The decision rules and complete output schema are frozen in
-[results/experiment2.md](results/experiment2.md). Experiment 2 requires the complete Experiment 1
-activation-shard directory; the compact result package alone is insufficient.
+The frozen detector localized 28.9% of first errors exactly, compared with 16.4% after circularly
+shifting its scores within each trace (permutation p = 0.0002). The score rose by 0.257 at the
+annotated onset. Metadata-matched transitions from correct traces rose by 0.113, for a difference
+of 0.144 with a two-way trace-clustered 95% interval of [0.096, 0.193]. Subtracting each erroneous
+trace's first-step score left pooled AUROC unchanged at 0.881 [0.862, 0.900]. These tests support a
+real but gradual temporal transition. They do not turn the probe into a precise detector: false
+alarms increase sharply with trace length, and the original causal verdict remains behaviorally
+invalid.
 
 ## Repository structure
 
@@ -113,8 +111,7 @@ activation-shard directory; the compact result package alone is insufficient.
 .
 ├── configs/
 │   ├── experiment.yaml          # Experiment 1 scientific configuration
-│   ├── experiment2.yaml         # full Experiment 2 publication configuration
-│   └── experiment2_fast.yaml    # non-publication preview configuration
+│   └── experiment2_cpu.yaml     # CPU follow-up resampling and output settings
 ├── data/processed/              # downloaded ProcessBench JSONL; ignored by Git
 ├── src/causal_circuits/
 │   ├── data.py                  # loading, normalization, and grouped splits
@@ -122,14 +119,13 @@ activation-shard directory; the compact result package alone is insufficient.
 │   ├── analysis.py              # probes, metrics, controls, and bootstrap analysis
 │   ├── circuits.py              # verdict scoring and Experiment 1 interventions
 │   ├── pipeline.py / cli.py     # Experiment 1 orchestration and CLI
-│   └── experiment2_*            # Experiment 2 analysis, extraction, causality, runtime, and CLI
+│   └── cpu_followup*.py         # post-hoc analysis and CLI
 ├── notebooks/
 │   ├── experiment.ipynb         # complete Experiment 1 A100/Drive workflow
-│   ├── experiment2.ipynb        # complete Experiment 2 A100/Drive workflow
 │   └── README.md                # notebook authentication, resume, and runtime notes
 ├── results/
-│   ├── experiment1.md           # complete empirical report
-│   └── experiment2.md           # preregistered follow-up design and decision table
+│   ├── experiment1.md           # Experiment 1 empirical report
+│   └── experiment2_cpu.md       # CPU follow-up methods and results
 ├── paper/
 │   ├── neurips_2026.tex / .pdf  # current manuscript and compiled output
 │   ├── figures/                 # PNG versions of the three Experiment 1 figures
@@ -191,49 +187,29 @@ The global `--config` option must precede the subcommand. The completed paper ru
 activation-extraction batch size of 16 on an A100; the notebook applies those runtime settings and
 records the resolved configuration with the artifacts.
 
-## Run Experiment 2
+## Run the CPU follow-up
 
-The recommended workflow is [notebooks/experiment2.ipynb](notebooks/experiment2.ipynb), which points
-to the complete Drive-backed Experiment 1 cache and writes all new outputs separately. Locally, run:
-
-```bash
-math-error-experiment2 --config configs/experiment2.yaml validate-config
-math-error-experiment2 --config configs/experiment2.yaml analyze-robustness
-math-error-experiment2 --config configs/experiment2.yaml extract-semantic
-math-error-experiment2 --config configs/experiment2.yaml fit-semantic
-math-error-experiment2 --config configs/experiment2.yaml audit-verdict
-math-error-experiment2 --config configs/experiment2.yaml causal-validation
-math-error-experiment2 --config configs/experiment2.yaml plot
-```
-
-Use `run-all` for the full sequence and `status` for a lightweight checkpoint report:
+After the Experiment 1 compact artifacts and processed ProcessBench data are present, run:
 
 ```bash
-math-error-experiment2 --config configs/experiment2.yaml run-all
-math-error-experiment2 --config configs/experiment2.yaml status
+math-error-cpu-followup --config configs/experiment2_cpu.yaml
 ```
 
-Semantic extraction resumes by shard, verdict scoring by completed inference batch, and causal
-validation by completed trace/mapping job. The pipeline writes atomic checkpoints and refuses to
-mix incompatible runs. `configs/experiment2_fast.yaml` is for iteration only; publication claims
-must use `configs/experiment2.yaml`.
-
-## Expected Experiment 2 outputs
+## Expected CPU follow-up outputs
 
 ```text
-artifacts/experiment2/
-├── experiment_config.yaml
-├── stage_status.json
-├── run_summary.json
-├── logs/
-├── marker_robustness/            # stronger controls and Stage A decision
-├── semantic_activation_shards/   # resumable cache
-├── semantic_boundary/            # natural-step probes and Stage B decision
-├── verdict_audit/                # counterbalanced readout and Stage C decision
-├── causal_validation/            # gradients, interventions, and Stage D decision
-└── figures/
-    ├── experiment2_summary.pdf
-    └── experiment2_summary.png
+artifacts/experiment2_cpu/
+├── temporal_randomization_summary.csv
+├── temporal_randomization_draws.csv
+├── error_aligned_trajectory.csv
+├── matched_placebo_onset.csv
+├── within_trace_discrimination.csv
+├── subgroup_outcomes.csv
+├── causal_assay_sensitivity.csv
+├── failure_audit_sample.jsonl
+├── temporal_validity.pdf / .png
+├── summary.json
+└── results.md
 ```
 
 ## Primary references

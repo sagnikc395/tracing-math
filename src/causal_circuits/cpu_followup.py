@@ -283,8 +283,12 @@ def matched_placebo_analysis(
     rows = []
     for metric in ("real_jump", "placebo_jump", "paired_difference", "onset_minus_prior"):
         values = frame[metric].dropna().to_numpy(dtype=float)
-        boot = np.asarray(
-            [rng.choice(values, size=len(values), replace=True).mean() for _ in range(samples)]
+        metric_frame = frame.loc[frame[metric].notna()].reset_index(drop=True)
+        boot = _matched_bootstrap_draws(
+            metric_frame,
+            metric=metric,
+            samples=samples,
+            rng=rng,
         )
         rows.append(
             {
@@ -296,6 +300,12 @@ def matched_placebo_analysis(
                 "n_traces": len(values),
                 "exact_source_generator_matches": int(
                     (frame["match_tier"] == "source_generator").sum()
+                ),
+                "unique_placebo_traces": int(metric_frame["placebo_trace_id"].nunique()),
+                "bootstrap_unit": (
+                    "error_and_placebo_trace"
+                    if metric in {"placebo_jump", "paired_difference"}
+                    else "error_trace"
                 ),
             }
         )
@@ -322,14 +332,24 @@ def centered_discrimination(
     for _, trace in frame.groupby("trace_id", sort=False):
         if trace["label"].nunique() == 2:
             macro_values.append(roc_auc_score(trace["label"], trace["score"]))
+    trace_codes, _ = pd.factorize(frame["trace_id"], sort=False)
+    labels = frame["label"].to_numpy(dtype=int)
+    raw_scores = frame["score"].to_numpy(dtype=float)
+    centered_scores = frame["centered_score"].to_numpy(dtype=float)
     rng = np.random.default_rng(seed)
     raw_draws = []
     centered_draws = []
     for _ in range(samples):
-        selected = rng.choice(trace_ids, size=len(trace_ids), replace=True)
-        sampled = pd.concat([frame[frame["trace_id"] == trace_id] for trace_id in selected])
-        raw_draws.append(roc_auc_score(sampled["label"], sampled["score"]))
-        centered_draws.append(roc_auc_score(sampled["label"], sampled["centered_score"]))
+        counts = np.bincount(
+            rng.integers(0, len(trace_ids), size=len(trace_ids)), minlength=len(trace_ids)
+        )
+        weights = counts[trace_codes]
+        raw_draws.append(roc_auc_score(labels, raw_scores, sample_weight=weights))
+        centered_draws.append(roc_auc_score(labels, centered_scores, sample_weight=weights))
+    macro_draws = [
+        float(rng.choice(macro_values, size=len(macro_values), replace=True).mean())
+        for _ in range(samples)
+    ]
     tail = (1 - confidence_level) / 2
     return pd.DataFrame(
         [
@@ -344,8 +364,8 @@ def centered_discrimination(
             {
                 "metric": "mean_within_trace_auroc",
                 "estimate": float(np.mean(macro_values)),
-                "ci_low": float("nan"),
-                "ci_high": float("nan"),
+                "ci_low": float(np.quantile(macro_draws, tail)),
+                "ci_high": float(np.quantile(macro_draws, 1 - tail)),
                 "n_traces": len(macro_values),
             },
         ]
@@ -653,6 +673,39 @@ def _interval_row(
         "ci_high": float(np.quantile(array, 1 - tail)),
         "n_traces": n_traces,
     }
+
+
+def _matched_bootstrap_draws(
+    frame: pd.DataFrame,
+    *,
+    metric: str,
+    samples: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    values = frame[metric].to_numpy(dtype=float)
+    if metric in {"real_jump", "onset_minus_prior"}:
+        return np.asarray(
+            [rng.choice(values, size=len(values), replace=True).mean() for _ in range(samples)]
+        )
+
+    placebo_codes, placebo_ids = pd.factorize(frame["placebo_trace_id"], sort=False)
+    draws = []
+    for _ in range(samples):
+        placebo_counts = np.bincount(
+            rng.integers(0, len(placebo_ids), size=len(placebo_ids)),
+            minlength=len(placebo_ids),
+        )
+        weights = placebo_counts[placebo_codes]
+        if metric == "paired_difference":
+            error_counts = np.bincount(
+                rng.integers(0, len(frame), size=len(frame)), minlength=len(frame)
+            )
+            weights = weights * error_counts
+        if weights.sum() == 0:
+            draws.append(float(values.mean()))
+        else:
+            draws.append(float(np.average(values, weights=weights)))
+    return np.asarray(draws)
 
 
 def _trace_outcome_frame(traces: list[TraceSeries], threshold: float) -> pd.DataFrame:

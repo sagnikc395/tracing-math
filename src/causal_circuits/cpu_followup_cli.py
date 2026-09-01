@@ -1,4 +1,4 @@
-"""Command-line entry point for the CPU-only Experiment 2 follow-up."""
+"""Command-line entry point for the CPU-only follow-up."""
 
 from __future__ import annotations
 
