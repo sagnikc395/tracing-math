@@ -5,12 +5,20 @@ import pandas as pd
 
 from tracing_math.followup.analysis import (
     TraceSeries,
+    _bootstrap_outcome_summaries,
+    _outcome_summary,
+    _paired_trace_predictions,
+    _probe_minus_control_metrics,
+    _trace_metric_draws,
+    _trace_metrics,
+    _weighted_probe_minus_control_metrics,
     centered_discrimination,
     length_aware_threshold_analysis,
     matched_placebo_analysis,
     paired_probe_control_intervals,
     temporal_randomization_test,
 )
+from tracing_math.localization import first_crossing
 
 
 def _trace(
@@ -42,14 +50,51 @@ def test_temporal_randomization_uses_frozen_within_trace_scores() -> None:
     summary, draws = temporal_randomization_test(
         traces,
         threshold=0.5,
-        samples=50,
+        samples=515,
         seed=42,
         confidence_level=0.95,
     )
     exact = summary.set_index("metric").loc["first_error_exact"]
     assert exact["observed"] == 1.0
     assert exact["null_mean"] < 1.0
-    assert len(draws) == 50
+    assert len(draws) == 515
+    reference_rng = np.random.default_rng(42)
+    expected = np.asarray([trace.first_error for trace in traces])
+    reference_rows = []
+    for sample in range(515):
+        predicted = np.asarray(
+            [
+                first_crossing(
+                    np.roll(
+                        trace.scores,
+                        int(reference_rng.integers(0, len(trace.scores)))
+                        if len(trace.scores) > 1
+                        else 0,
+                    ),
+                    0.5,
+                )
+                for trace in traces
+            ]
+        )
+        reference_rows.append({"sample": sample, **_trace_metrics(expected, predicted)})
+    reference = pd.DataFrame(reference_rows)[draws.columns]
+    pd.testing.assert_frame_equal(draws, reference, check_exact=False, rtol=1e-15)
+
+
+def test_vectorized_trace_metric_draws_match_single_draw_metrics() -> None:
+    expected = np.asarray([-1, 1, 2, 1])
+    predicted = np.asarray(
+        [
+            [-1, 1, 2, -1],
+            [0, 0, 3, 2],
+            [-1, -1, -1, -1],
+        ]
+    )
+    vectorized = _trace_metric_draws(expected, predicted)
+    for draw_index, row in vectorized.iterrows():
+        reference = _trace_metrics(expected, predicted[draw_index])
+        for metric, value in reference.items():
+            np.testing.assert_allclose(row[metric], value, equal_nan=True)
 
 
 def test_matched_placebo_detects_onset_jump_beyond_correct_trace_drift() -> None:
@@ -158,3 +203,80 @@ def test_probe_control_bootstrap_is_paired_by_trace() -> None:
     ).set_index("metric")
     assert result.loc["auroc", "probe_minus_control"] == 0.5
     assert result.loc["auroc", "ci_low"] == 0.5
+
+
+def test_weighted_probe_control_draw_matches_duplicated_trace_rows() -> None:
+    rows = []
+    for trace_id, first_error, probe_scores, control_scores in (
+        ("a", -1, [0.1, 0.2], [0.3, 0.7]),
+        ("b", 1, [0.2, 0.9], [0.6, 0.7]),
+        ("c", 2, [0.1, 0.4, 0.8], [0.2, 0.8, 0.9]),
+    ):
+        for step_index, (probe_score, control_score) in enumerate(
+            zip(probe_scores, control_scores, strict=True)
+        ):
+            rows.append(
+                {
+                    "trace_id": trace_id,
+                    "step_index": step_index,
+                    "probe_error": first_error,
+                    "probe_label": int(first_error >= 0 and step_index >= first_error),
+                    "probe_score": probe_score,
+                    "control_score": control_score,
+                }
+            )
+    frame = pd.DataFrame(rows)
+    trace_codes, trace_ids = pd.factorize(frame["trace_id"], sort=False)
+    trace_weights = np.asarray([2, 0, 1])
+    expected, probe_predicted, control_predicted = _paired_trace_predictions(
+        frame,
+        trace_codes,
+        trace_count=len(trace_ids),
+        probe_threshold=0.5,
+        control_threshold=0.5,
+    )
+    weighted = _weighted_probe_minus_control_metrics(
+        labels=frame["probe_label"].to_numpy(),
+        probe_scores=frame["probe_score"].to_numpy(),
+        control_scores=frame["control_score"].to_numpy(),
+        probe_threshold=0.5,
+        control_threshold=0.5,
+        row_weights=trace_weights[trace_codes],
+        trace_weights=trace_weights,
+        expected=expected,
+        probe_predicted=probe_predicted,
+        control_predicted=control_predicted,
+    )
+    duplicated = pd.concat(
+        [
+            frame.loc[frame["trace_id"].eq(trace_id)].assign(trace_id=f"draw-{draw_index}")
+            for draw_index, trace_id in enumerate(("a", "a", "c"))
+        ],
+        ignore_index=True,
+    )
+    duplicated["control_label"] = duplicated["probe_label"]
+    duplicated["control_error"] = duplicated["probe_error"]
+    reference = _probe_minus_control_metrics(duplicated, 0.5, 0.5)
+    assert weighted == reference
+
+
+def test_vectorized_subgroup_bootstrap_matches_row_resampling() -> None:
+    frame = pd.DataFrame(
+        {
+            "first_error": [-1, -1, 1, 2],
+            "predicted_first_error": [-1, 0, 1, -1],
+        }
+    )
+    vectorized = _bootstrap_outcome_summaries(
+        frame, samples=20, rng=np.random.default_rng(42)
+    )
+    reference_rng = np.random.default_rng(42)
+    reference = pd.DataFrame(
+        [
+            _outcome_summary(
+                frame.iloc[reference_rng.integers(0, len(frame), len(frame))]
+            )
+            for _ in range(20)
+        ]
+    )
+    pd.testing.assert_frame_equal(vectorized, reference)

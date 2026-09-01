@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 from tracing_math.experiment1.probes import binary_metrics, choose_threshold
 from tracing_math.followup.config import FollowupConfig
@@ -21,6 +22,8 @@ from tracing_math.localization import (
     outcome_label,
     quantile_interval,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -37,12 +40,14 @@ class TraceSeries:
 
 def run_followup(config: FollowupConfig) -> dict[str, Any]:
     """Run the complete follow-up without loading a language model or activation shard."""
+    LOGGER.info("Loading frozen Experiment 1 predictions")
     predictions = _load_predictions(config.experiment1_dir)
     threshold = _load_threshold(config.experiment1_dir, predictions)
     traces = _trace_series(predictions)
     output = config.output_dir
     output.mkdir(parents=True, exist_ok=True)
 
+    LOGGER.info("Running temporal randomization (%d draws)", config.permutation_samples)
     permutation_summary, permutation_draws = temporal_randomization_test(
         traces,
         threshold=threshold,
@@ -53,6 +58,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     permutation_summary.to_csv(output / "temporal_randomization_summary.csv", index=False)
     permutation_draws.to_csv(output / "temporal_randomization_draws.csv", index=False)
 
+    LOGGER.info("Running error-aligned event study (%d draws)", config.bootstrap_samples)
     trajectory = event_study(
         traces,
         samples=config.bootstrap_samples,
@@ -61,6 +67,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     )
     trajectory.to_csv(output / "error_aligned_trajectory.csv", index=False)
 
+    LOGGER.info("Running matched-placebo analysis (%d draws)", config.bootstrap_samples)
     placebo = matched_placebo_analysis(
         traces,
         samples=config.bootstrap_samples,
@@ -69,6 +76,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     )
     placebo.to_csv(output / "matched_placebo_onset.csv", index=False)
 
+    LOGGER.info("Running within-trace discrimination (%d draws)", config.bootstrap_samples)
     centered = centered_discrimination(
         predictions,
         samples=config.bootstrap_samples,
@@ -97,6 +105,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
 
     control_predictions_path = config.experiment1_dir / "probes" / "control_predictions.csv"
     if control_predictions_path.exists():
+        LOGGER.info("Running paired probe-control intervals (%d draws)", config.bootstrap_samples)
         control_predictions = pd.read_csv(control_predictions_path)
         paired_controls = paired_probe_control_intervals(
             predictions,
@@ -116,6 +125,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         )
     (output / "analysis_availability.json").write_text(json.dumps(availability, indent=2))
 
+    LOGGER.info("Running subgroup intervals (%d draws)", config.bootstrap_samples)
     subgroups = subgroup_outcomes(
         traces,
         threshold=threshold,
@@ -126,6 +136,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     )
     subgroups.to_csv(output / "subgroup_outcomes.csv", index=False)
 
+    LOGGER.info("Summarizing causal sensitivity and writing audit outputs")
     sensitivity = causal_sensitivity_analysis(
         config.experiment1_dir,
         confidence_level=config.confidence_level,
@@ -157,6 +168,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     )
     (output / "summary.json").write_text(json.dumps(summary, indent=2))
     (output / "results.md").write_text(_results_markdown(summary, placebo, centered, sensitivity))
+    LOGGER.info("CPU follow-up complete: %s", output)
     return summary
 
 
@@ -287,19 +299,34 @@ def paired_probe_control_intervals(
             raise ValueError(f"Control {control_name!r} labels do not match probe labels")
         control_threshold = float(merged["threshold"].iloc[0])
         point = _probe_minus_control_metrics(merged, probe_threshold, control_threshold)
-        groups = {trace_id: group for trace_id, group in merged.groupby("trace_id", sort=False)}
-        trace_ids = np.asarray(list(groups))
+        trace_codes, trace_ids = pd.factorize(merged["trace_id"], sort=False)
+        expected, probe_predicted, control_predicted = _paired_trace_predictions(
+            merged,
+            trace_codes,
+            trace_count=len(trace_ids),
+            probe_threshold=probe_threshold,
+            control_threshold=control_threshold,
+        )
+        labels = merged["probe_label"].to_numpy(dtype=int)
+        probe_scores = merged["probe_score"].to_numpy(dtype=float)
+        control_scores = merged["control_score"].to_numpy(dtype=float)
         draws: dict[str, list[float]] = {metric: [] for metric in point}
         for _ in range(samples):
-            pieces = []
-            for draw_index, trace_id in enumerate(
-                rng.choice(trace_ids, size=len(trace_ids), replace=True)
-            ):
-                piece = groups[trace_id].copy()
-                piece["trace_id"] = f"bootstrap-{draw_index}"
-                pieces.append(piece)
-            draw = _probe_minus_control_metrics(
-                pd.concat(pieces, ignore_index=True), probe_threshold, control_threshold
+            trace_weights = np.bincount(
+                rng.integers(0, len(trace_ids), size=len(trace_ids)),
+                minlength=len(trace_ids),
+            )
+            draw = _weighted_probe_minus_control_metrics(
+                labels=labels,
+                probe_scores=probe_scores,
+                control_scores=control_scores,
+                probe_threshold=probe_threshold,
+                control_threshold=control_threshold,
+                row_weights=trace_weights[trace_codes],
+                trace_weights=trace_weights,
+                expected=expected,
+                probe_predicted=probe_predicted,
+                control_predicted=control_predicted,
             )
             for metric, value in draw.items():
                 if np.isfinite(value):
@@ -337,15 +364,44 @@ def temporal_randomization_test(
         [first_crossing(trace.scores, threshold) for trace in traces], dtype=int
     )
     observed = _trace_metrics(expected, observed_predicted)
+    crossing_by_offset = [
+        np.asarray(
+            [
+                first_crossing(np.roll(trace.scores, offset), threshold)
+                for offset in range(len(trace.scores))
+            ],
+            dtype=int,
+        )
+        for trace in traces
+    ]
     rng = np.random.default_rng(seed)
-    rows: list[dict[str, float | int]] = []
-    for sample in range(samples):
-        predicted = []
-        for trace in traces:
-            offset = int(rng.integers(0, len(trace.scores))) if len(trace.scores) > 1 else 0
-            predicted.append(first_crossing(np.roll(trace.scores, offset), threshold))
-        rows.append({"sample": sample, **_trace_metrics(expected, np.asarray(predicted))})
-    draws = pd.DataFrame(rows)
+    draw_batches = []
+    batch_size = 512
+    variable_indices = np.asarray(
+        [index for index, crossings in enumerate(crossing_by_offset) if len(crossings) > 1]
+    )
+    variable_lengths = np.asarray(
+        [len(crossing_by_offset[index]) for index in variable_indices]
+    )
+    for start in range(0, samples, batch_size):
+        size = min(batch_size, samples - start)
+        predicted = np.empty((size, len(traces)), dtype=int)
+        offsets = (
+            rng.integers(0, variable_lengths, size=(size, len(variable_indices)))
+            if len(variable_indices)
+            else np.empty((size, 0), dtype=int)
+        )
+        variable_column = 0
+        for trace_index, crossings in enumerate(crossing_by_offset):
+            if len(crossings) == 1:
+                predicted[:, trace_index] = crossings[0]
+            else:
+                predicted[:, trace_index] = crossings[offsets[:, variable_column]]
+                variable_column += 1
+        batch = _trace_metric_draws(expected, predicted)
+        batch.insert(0, "sample", np.arange(start, start + size))
+        draw_batches.append(batch)
+    draws = pd.concat(draw_batches, ignore_index=True)
     tail = (1 - confidence_level) / 2
     specifications = {
         "first_error_exact": "higher",
@@ -380,6 +436,54 @@ def temporal_randomization_test(
             }
         )
     return pd.DataFrame(summary_rows), draws
+
+
+def _trace_metric_draws(expected: np.ndarray, predicted: np.ndarray) -> pd.DataFrame:
+    """Vectorized counterpart of ``_trace_metrics`` for permutation batches."""
+    expected = np.asarray(expected, dtype=int)
+    predicted = np.asarray(predicted, dtype=int)
+    if predicted.ndim != 2 or predicted.shape[1] != len(expected):
+        raise ValueError("predicted draws must have shape (draws, traces)")
+    erroneous = expected >= 0
+    correct = ~erroneous
+    error_expected = expected[erroneous]
+    error_predictions = predicted[:, erroneous]
+    correct_predictions = predicted[:, correct]
+    detected = error_predictions >= 0
+    localization_error = error_predictions - error_expected
+    detected_count = detected.sum(axis=1)
+
+    def detected_mean(values: np.ndarray) -> np.ndarray:
+        return np.divide(
+            np.where(detected, values, 0).sum(axis=1),
+            detected_count,
+            out=np.full(len(predicted), np.nan),
+            where=detected_count > 0,
+        )
+
+    error_accuracy = (error_predictions == error_expected).mean(axis=1)
+    correct_accuracy = (correct_predictions == -1).mean(axis=1)
+    denominator = error_accuracy + correct_accuracy
+    process_f1 = np.divide(
+        2 * error_accuracy * correct_accuracy,
+        denominator,
+        out=np.zeros(len(predicted), dtype=float),
+        where=denominator > 0,
+    )
+    output = {
+        "first_error_exact": error_accuracy,
+        "correct_rejection": correct_accuracy,
+        "process_f1": process_f1,
+        "complete_trace_accuracy": (predicted == expected).mean(axis=1),
+        "error_detection_rate": detected.mean(axis=1),
+        "mean_signed_localization_error": detected_mean(localization_error),
+        "mean_absolute_localization_error": detected_mean(np.abs(localization_error)),
+    }
+    for tolerance in (1, 2):
+        output[f"error_within_{tolerance}_accuracy"] = (
+            detected & (np.abs(localization_error) <= tolerance)
+        ).mean(axis=1)
+    return pd.DataFrame(output)
 
 
 def event_study(
@@ -586,11 +690,7 @@ def subgroup_outcomes(
         for value, group in frame.groupby(column, dropna=False, sort=True):
             if len(group) < min_traces:
                 continue
-            draws = []
-            for _ in range(samples):
-                sampled = group.iloc[rng.integers(0, len(group), len(group))]
-                draws.append(_outcome_summary(sampled))
-            draw_frame = pd.DataFrame(draws)
+            draw_frame = _bootstrap_outcome_summaries(group, samples=samples, rng=rng)
             point = _outcome_summary(group)
             row: dict[str, Any] = {
                 "subgroup": column,
@@ -888,6 +988,39 @@ def _outcome_summary(frame: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def _bootstrap_outcome_summaries(
+    frame: pd.DataFrame,
+    *,
+    samples: int,
+    rng: np.random.Generator,
+) -> pd.DataFrame:
+    """Vectorize trace-level subgroup resampling without constructing DataFrames per draw."""
+    erroneous = frame["first_error"].ge(0).to_numpy()
+    correct = ~erroneous
+    complete = frame["predicted_first_error"].eq(frame["first_error"]).to_numpy()
+    rejected = frame["predicted_first_error"].lt(0).to_numpy()
+    positions = rng.integers(0, len(frame), size=(samples, len(frame)))
+    sampled_erroneous = erroneous[positions]
+    sampled_correct = correct[positions]
+
+    def conditional_mean(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        denominator = mask.sum(axis=1)
+        return np.divide(
+            np.where(mask, values, False).sum(axis=1),
+            denominator,
+            out=np.full(samples, np.nan),
+            where=denominator > 0,
+        )
+
+    return pd.DataFrame(
+        {
+            "complete_trace_accuracy": complete[positions].mean(axis=1),
+            "error_exact": conditional_mean(complete[positions], sampled_erroneous),
+            "correct_rejection": conditional_mean(rejected[positions], sampled_correct),
+        }
+    )
+
+
 def _length_bin_specification(frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
     trace_lengths = frame.drop_duplicates("trace_id")["n_steps"].to_numpy(dtype=float)
     edges = np.unique(np.quantile(trace_lengths, [0.0, 0.25, 0.5, 0.75, 1.0]))
@@ -950,6 +1083,140 @@ def _probe_minus_control_metrics(
             metric: probe_process[metric] - control_process[metric]
             for metric in probe_process
         },
+    }
+
+
+def _paired_trace_predictions(
+    frame: pd.DataFrame,
+    trace_codes: np.ndarray,
+    *,
+    trace_count: int,
+    probe_threshold: float,
+    control_threshold: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Precompute trace-level outcomes once for the paired bootstrap."""
+    expected = np.empty(trace_count, dtype=int)
+    probe_predicted = np.empty(trace_count, dtype=int)
+    control_predicted = np.empty(trace_count, dtype=int)
+    step_indices = frame["step_index"].to_numpy(dtype=int)
+    first_errors = frame["probe_error"].to_numpy(dtype=int)
+    probe_scores = frame["probe_score"].to_numpy(dtype=float)
+    control_scores = frame["control_score"].to_numpy(dtype=float)
+    for trace_code in range(trace_count):
+        positions = np.flatnonzero(trace_codes == trace_code)
+        order = positions[np.argsort(step_indices[positions], kind="stable")]
+        expected[trace_code] = first_errors[order[0]]
+        probe_predicted[trace_code] = first_crossing(
+            probe_scores[order], probe_threshold, step_indices[order]
+        )
+        control_predicted[trace_code] = first_crossing(
+            control_scores[order], control_threshold, step_indices[order]
+        )
+    return expected, probe_predicted, control_predicted
+
+
+def _weighted_probe_minus_control_metrics(
+    *,
+    labels: np.ndarray,
+    probe_scores: np.ndarray,
+    control_scores: np.ndarray,
+    probe_threshold: float,
+    control_threshold: float,
+    row_weights: np.ndarray,
+    trace_weights: np.ndarray,
+    expected: np.ndarray,
+    probe_predicted: np.ndarray,
+    control_predicted: np.ndarray,
+) -> dict[str, float]:
+    """Calculate one paired bootstrap draw without rebuilding pandas frames."""
+    probe_binary = _weighted_binary_metrics(
+        labels, probe_scores, probe_threshold, row_weights
+    )
+    control_binary = _weighted_binary_metrics(
+        labels, control_scores, control_threshold, row_weights
+    )
+    probe_process = _weighted_process_metrics(expected, probe_predicted, trace_weights)
+    control_process = _weighted_process_metrics(expected, control_predicted, trace_weights)
+    return {
+        metric: probe_binary[metric] - control_binary[metric]
+        for metric in ("auroc", "average_precision", "step_f1")
+    } | {
+        metric: probe_process[metric] - control_process[metric]
+        for metric in probe_process
+    }
+
+
+def _weighted_binary_metrics(
+    labels: np.ndarray,
+    scores: np.ndarray,
+    threshold: float,
+    weights: np.ndarray,
+) -> dict[str, float]:
+    positive = labels == 1
+    negative = ~positive
+    positive_weight = float(weights[positive].sum())
+    negative_weight = float(weights[negative].sum())
+    predicted = scores >= threshold
+    true_positive = float(weights[predicted & positive].sum())
+    false_positive = float(weights[predicted & negative].sum())
+    false_negative = float(weights[~predicted & positive].sum())
+    precision = (
+        true_positive / (true_positive + false_positive)
+        if true_positive + false_positive
+        else 0.0
+    )
+    recall = (
+        true_positive / (true_positive + false_negative)
+        if true_positive + false_negative
+        else float("nan")
+    )
+    step_f1 = (
+        2 * precision * recall / (precision + recall)
+        if precision + recall > 0
+        else 0.0
+    )
+    if positive_weight == 0 or negative_weight == 0:
+        auroc = average_precision = float("nan")
+    else:
+        auroc = float(roc_auc_score(labels, scores, sample_weight=weights))
+        average_precision = float(
+            average_precision_score(labels, scores, sample_weight=weights)
+        )
+    return {
+        "auroc": auroc,
+        "average_precision": average_precision,
+        "step_f1": float(step_f1),
+    }
+
+
+def _weighted_process_metrics(
+    expected: np.ndarray,
+    predicted: np.ndarray,
+    weights: np.ndarray,
+) -> dict[str, float]:
+    erroneous = expected >= 0
+    correct = ~erroneous
+
+    def weighted_mean(values: np.ndarray, mask: np.ndarray) -> float:
+        denominator = float(weights[mask].sum())
+        return (
+            float(np.dot(values[mask].astype(float), weights[mask]) / denominator)
+            if denominator
+            else float("nan")
+        )
+
+    error_accuracy = weighted_mean(predicted == expected, erroneous)
+    correct_rejection = weighted_mean(predicted == -1, correct)
+    denominator = error_accuracy + correct_rejection
+    return {
+        "process_f1": (
+            2 * error_accuracy * correct_rejection / denominator if denominator > 0 else 0.0
+        ),
+        "correct_rejection": correct_rejection,
+        "error_exact": error_accuracy,
+        "complete_accuracy": weighted_mean(
+            predicted == expected, np.ones(len(expected), dtype=bool)
+        ),
     }
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import click
@@ -22,6 +23,7 @@ def main(config: Path) -> None:
     """Run the CPU-only follow-up over frozen Experiment 1 outputs."""
     from tracing_math.followup.analysis import run_followup
 
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     click.echo(json.dumps(run_followup(FollowupConfig.from_yaml(config)), indent=2))
 
 
