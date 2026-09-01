@@ -6,9 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from causal_circuits.experiment1.config import ExperimentConfig
-from causal_circuits.experiment1.data import ProcessTrace
-from causal_circuits.experiment1.interventions import (
+from tracing_math.experiment1.config import ExperimentConfig
+from tracing_math.experiment1.data import ProcessTrace
+from tracing_math.experiment1.interventions import (
     causal_effect_statistics,
     random_orthogonal_directions,
     run_interventions,
@@ -99,7 +99,7 @@ def test_interventions_batch_and_resume_from_group_checkpoints() -> None:
             for trace in traces
         ]
     )
-    base = ExperimentConfig.from_yaml("configs/experiment.yaml").intervention
+    base = ExperimentConfig.from_yaml("configs/experiment1.yaml").intervention
     config = replace(
         base,
         alphas=(-1.0, 0.0, 1.0),

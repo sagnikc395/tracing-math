@@ -12,14 +12,14 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
-from tqdm.auto import tqdm
 
-from causal_circuits.experiment1.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
-from causal_circuits.localization import (
+from tracing_math.experiment1.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
+from tracing_math.localization import (
     localization_metrics,
     localization_outcomes,
     quantile_interval,
 )
+from tracing_math.parallel import ordered_parallel_map
 
 PREDICTION_COLUMNS = [
     "trace_id",
@@ -224,7 +224,10 @@ def fit_layer_probes(
         family for family in config.families if family.name == config.primary_family
     )
 
-    for layer in tqdm(range(n_layers), desc="primary probe layers"):
+    fit_mask = masks["train"] | masks["validation"]
+    erroneous_test = masks["test"] & metadata["has_error_trace"].eq(1).to_numpy()
+
+    def fit_primary_layer(layer: int) -> dict[str, object]:
         x = np.asarray(activations[:, layer, :], dtype=np.float32)
         best_c, _, validation_scores = _select_hyperparameters(
             x[masks["train"]],
@@ -243,9 +246,7 @@ def fit_layer_probes(
             threshold_max=analysis_config.threshold_max,
             threshold_points=analysis_config.threshold_points,
         )
-        selected_cs[layer] = best_c
-        thresholds[layer] = threshold
-        metrics_rows.append(
+        layer_metrics = [
             _metric_row(
                 layer,
                 "validation",
@@ -256,9 +257,8 @@ def fit_layer_probes(
                 best_c,
                 analysis_config,
             )
-        )
+        ]
 
-        fit_mask = masks["train"] | masks["validation"]
         scaler, classifier = _fit_logistic(
             x[fit_mask], labels[fit_mask], best_c, config.max_iter, seed
         )
@@ -268,9 +268,11 @@ def fit_layer_probes(
         norm = np.linalg.norm(direction)
         if norm == 0:
             raise RuntimeError(f"Layer {layer} produced a zero probe direction")
-        directions[layer] = direction / norm
-        projection_stds[layer] = max(float(np.std(x[fit_mask] @ directions[layer], ddof=1)), 1e-8)
-        metrics_rows.append(
+        normalized_direction = (direction / norm).astype(np.float32)
+        projection_std = max(
+            float(np.std(x[fit_mask] @ normalized_direction, ddof=1)), 1e-8
+        )
+        layer_metrics.append(
             _metric_row(
                 layer,
                 "test",
@@ -282,9 +284,8 @@ def fit_layer_probes(
                 analysis_config,
             )
         )
-        erroneous_test = masks["test"] & metadata["has_error_trace"].eq(1).to_numpy()
         erroneous_scores = classifier.predict_proba(scaler.transform(x[erroneous_test]))[:, 1]
-        metrics_rows.append(
+        layer_metrics.append(
             _metric_row(
                 layer,
                 "test_error_traces",
@@ -303,13 +304,12 @@ def fit_layer_probes(
         layer_predictions["layer"] = layer
         layer_predictions["label"] = labels[masks["test"]]
         layer_predictions["score"] = test_scores
-        prediction_rows.append(layer_predictions)
         layer_fit_predictions = metadata.loc[fit_mask, PREDICTION_COLUMNS].copy()
         layer_fit_predictions["partition"] = metadata.loc[fit_mask, "partition"]
         layer_fit_predictions["layer"] = layer
         layer_fit_predictions["label"] = labels[fit_mask]
         layer_fit_predictions["score"] = fit_scores
-        fit_prediction_rows.append(layer_fit_predictions)
+        validation_predictions = None
         if analysis_config.exploratory_bootstrap_samples > 0:
             validation_predictions = metadata.loc[
                 masks["validation"],
@@ -318,7 +318,35 @@ def fit_layer_probes(
             validation_predictions["layer"] = layer
             validation_predictions["label"] = labels[masks["validation"]]
             validation_predictions["score"] = validation_scores
-            validation_prediction_rows.append(validation_predictions)
+        return {
+            "layer": layer,
+            "best_c": best_c,
+            "threshold": threshold,
+            "metrics": layer_metrics,
+            "test_predictions": layer_predictions,
+            "fit_predictions": layer_fit_predictions,
+            "validation_predictions": validation_predictions,
+            "direction": normalized_direction,
+            "projection_std": projection_std,
+        }
+
+    layer_results = ordered_parallel_map(
+        fit_primary_layer,
+        range(n_layers),
+        workers=analysis_config.workers,
+        description="primary probe layers",
+    )
+    for result in layer_results:
+        layer = int(result["layer"])
+        selected_cs[layer] = float(result["best_c"])
+        thresholds[layer] = float(result["threshold"])
+        directions[layer] = result["direction"]
+        projection_stds[layer] = float(result["projection_std"])
+        metrics_rows.extend(result["metrics"])
+        prediction_rows.append(result["test_predictions"])
+        fit_prediction_rows.append(result["fit_predictions"])
+        if result["validation_predictions"] is not None:
+            validation_prediction_rows.append(result["validation_predictions"])
 
     metrics = pd.DataFrame(metrics_rows)
     validation = metrics[metrics["split"] == "validation"].sort_values(
@@ -550,11 +578,9 @@ def _fit_family_layers(
     masks = _partition_masks(metadata)
     if any(len(np.unique(labels[mask])) < 2 for mask in masks.values()):
         return pd.DataFrame(), pd.DataFrame()
-    metric_rows = []
-    for layer in tqdm(
-        range(activations.shape[1]),
-        desc=f"{family.name} / {target} layers",
-    ):
+
+    def fit_family_layer(layer: int) -> list[dict[str, object]]:
+        layer_rows = []
         hidden = np.asarray(activations[:, layer, :], dtype=np.float32)
         best_c, best_ratio, validation_scores = _select_hyperparameters(
             hidden[masks["train"]],
@@ -576,7 +602,7 @@ def _fit_family_layers(
         reported_ratio = (
             best_ratio if best_ratio is not None else (1.0 if family.penalty == "l1" else 0.0)
         )
-        metric_rows.append(
+        layer_rows.append(
             {
                 **_metric_row(
                     layer,
@@ -605,7 +631,7 @@ def _fit_family_layers(
             l1_ratio=best_ratio,
         )
         test_scores = classifier.predict_proba(scaler.transform(hidden[masks["test"]]))[:, 1]
-        metric_rows.append(
+        layer_rows.append(
             {
                 **_metric_row(
                     layer,
@@ -626,7 +652,7 @@ def _fit_family_layers(
         erroneous = masks["test"] & metadata["has_error_trace"].eq(1).to_numpy()
         if len(np.unique(labels[erroneous])) >= 2:
             erroneous_scores = classifier.predict_proba(scaler.transform(hidden[erroneous]))[:, 1]
-            metric_rows.append(
+            layer_rows.append(
                 {
                     **_metric_row(
                         layer,
@@ -644,6 +670,15 @@ def _fit_family_layers(
                     "target": target,
                 }
             )
+        return layer_rows
+
+    layer_rows = ordered_parallel_map(
+        fit_family_layer,
+        range(activations.shape[1]),
+        workers=analysis_config.workers,
+        description=f"{family.name} / {target} layers",
+    )
+    metric_rows = [row for rows in layer_rows for row in rows]
     metrics = pd.DataFrame(metric_rows)
     selected = (
         metrics[metrics["split"] == "validation"]
@@ -737,11 +772,12 @@ def group_bootstrap_metrics(
     expected, predicted = localization_outcomes(metadata, scores, threshold)
     n_traces = len(trace_indices)
     rng = np.random.default_rng(seed)
-    rows = []
-    for sample_index in range(samples):
-        draws = rng.choice(n_traces, size=n_traces, replace=True)
+    all_draws = rng.choice(n_traces, size=(samples, n_traces), replace=True)
+
+    def bootstrap_sample(item: tuple[int, np.ndarray]) -> dict[str, float]:
+        sample_index, draws = item
         sampled_indices = np.concatenate([trace_indices[index] for index in draws])
-        row = {
+        return {
             "sample": sample_index,
             **binary_metrics(
                 labels[sampled_indices],
@@ -755,7 +791,11 @@ def group_bootstrap_metrics(
                 analysis_config.localization_tolerances,
             ),
         }
-        rows.append(row)
+    rows = ordered_parallel_map(
+        bootstrap_sample,
+        enumerate(all_draws),
+        workers=analysis_config.workers,
+    )
     return pd.DataFrame(rows)
 
 
@@ -1093,17 +1133,25 @@ def _paired_comparison_bootstrap(
     groups = {trace_id: group for trace_id, group in frame.groupby("trace_id", sort=False)}
     trace_ids = np.asarray(list(groups))
     rng = np.random.default_rng(seed)
-    rows = []
-    for _ in range(samples):
+    all_draws = rng.choice(len(trace_ids), size=(samples, len(trace_ids)), replace=True)
+
+    def bootstrap_sample(draws: np.ndarray) -> dict[str, float]:
         pieces = []
-        for draw_index, trace_id in enumerate(rng.choice(trace_ids, len(trace_ids), replace=True)):
+        for draw_index, trace_index in enumerate(draws):
+            trace_id = trace_ids[trace_index]
             piece = groups[trace_id].copy()
             piece["trace_id"] = f"bootstrap-{draw_index}"
             pieces.append(piece)
         sampled = pd.concat(pieces, ignore_index=True)
         primary = _comparison_values(sampled, "score_primary", primary_threshold, config)
         candidate = _comparison_values(sampled, "score_candidate", candidate_threshold, config)
-        rows.append({metric: candidate[metric] - value for metric, value in primary.items()})
+        return {metric: candidate[metric] - value for metric, value in primary.items()}
+
+    rows = ordered_parallel_map(
+        bootstrap_sample,
+        all_draws,
+        workers=config.workers,
+    )
     return pd.DataFrame(rows)
 
 
@@ -1216,18 +1264,19 @@ def domain_transfer(
     analysis_config: AnalysisConfig | None = None,
 ) -> pd.DataFrame:
     analysis_config = analysis_config or AnalysisConfig()
-    rows: list[dict[str, object]] = []
     sources = sorted(metadata["source"].unique())
-    for train_source in sources:
+
+    def fit_source(train_source: str) -> list[dict[str, object]]:
         train = metadata["source"].eq(train_source) & metadata["partition"].eq("train")
         validation = metadata["source"].eq(train_source) & metadata["partition"].eq("validation")
         if labels[train].min() == labels[train].max():
-            continue
+            return []
         scaler, classifier = _fit_logistic(hidden[train], labels[train], c_value, max_iter, seed)
         validation_scores = classifier.predict_proba(scaler.transform(hidden[validation]))[:, 1]
         threshold = _choose_configured_threshold(
             metadata.loc[validation], validation_scores, analysis_config
         )
+        source_rows = []
         for test_source in sources:
             test = metadata["source"].eq(test_source) & metadata["partition"].eq("test")
             scores = classifier.predict_proba(scaler.transform(hidden[test]))[:, 1]
@@ -1240,7 +1289,15 @@ def domain_transfer(
                 analysis_config,
             )
             row.update({"train_source": train_source, "test_source": test_source})
-            rows.append(row)
+            source_rows.append(row)
+        return source_rows
+
+    source_results = ordered_parallel_map(
+        fit_source,
+        sources,
+        workers=analysis_config.workers,
+    )
+    rows = [row for source_rows in source_results for row in source_rows]
     return pd.DataFrame(rows)
 
 
@@ -1265,8 +1322,9 @@ def pca_subspace_curve(
         return pd.DataFrame()
     pca = PCA(n_components=maximum, svd_solver="randomized", random_state=seed).fit(hidden[train])
     transformed = pca.transform(hidden)
-    rows = []
-    for dimension in sorted({value for value in dimensions if value <= maximum}):
+    selected_dimensions = sorted({value for value in dimensions if value <= maximum})
+
+    def fit_dimension(dimension: int) -> dict[str, object]:
         scaler, classifier = _fit_logistic(
             transformed[train, :dimension], labels[train], c_value, max_iter, seed
         )
@@ -1287,7 +1345,13 @@ def pca_subspace_curve(
         )
         row["dimensions"] = dimension
         row["variance_explained"] = float(pca.explained_variance_ratio_[:dimension].sum())
-        rows.append(row)
+        return row
+
+    rows = ordered_parallel_map(
+        fit_dimension,
+        selected_dimensions,
+        workers=analysis_config.workers,
+    )
     return pd.DataFrame(rows)
 
 

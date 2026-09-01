@@ -72,12 +72,12 @@ issues before they reach review.
 
 ### 11. No `py.typed` marker
 
-Adding `src/causal_circuits/py.typed` would signal to downstream type checkers
+Adding `src/tracing_math/py.typed` would signal to downstream type checkers
 (mypy, pyright) that this package ships inline types.
 
 ### 12. Coverage reporting
 
-Running `pytest --cov=causal_circuits --cov-report=term-missing` would quantify
+Running `pytest --cov=tracing_math --cov-report=term-missing` would quantify
 actual line coverage rather than relying on file-count heuristics. Integrating
 coverage into CI with a minimum threshold would prevent regressions.
 

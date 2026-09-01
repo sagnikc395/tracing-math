@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from causal_circuits.followup.analysis import (
+from tracing_math.followup.analysis import (
     TraceSeries,
     centered_discrimination,
     length_aware_threshold_analysis,

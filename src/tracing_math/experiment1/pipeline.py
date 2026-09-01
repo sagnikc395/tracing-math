@@ -11,27 +11,28 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from causal_circuits.experiment1.config import ExperimentConfig
-from causal_circuits.experiment1.data import (
+from tracing_math.experiment1.config import ExperimentConfig
+from tracing_math.experiment1.data import (
     assign_partitions,
     iter_step_metadata,
     load_huggingface_traces,
     load_traces,
     save_traces,
 )
-from causal_circuits.experiment1.interventions import (
+from tracing_math.experiment1.interventions import (
     causal_effect_statistics,
     run_interventions,
     score_intervention_baseline,
     summarize_interventions,
 )
-from causal_circuits.experiment1.model import (
+from tracing_math.experiment1.model import (
     VERDICT_QUESTION,
     VERDICT_READOUT_ID,
     HuggingFaceMathModel,
     TraceTooLongError,
 )
-from causal_circuits.experiment1.probes import ProbeResults, binary_metrics, fit_layer_probes
+from tracing_math.experiment1.probes import ProbeResults, binary_metrics, fit_layer_probes
+from tracing_math.parallel import ordered_parallel_map
 
 
 def download_data(config: ExperimentConfig, *, force: bool = False) -> Path:
@@ -132,15 +133,15 @@ def extract_activation_shards(config: ExperimentConfig) -> dict[str, int]:
     return totals
 
 
-def load_activation_shards(output_dir: str | Path) -> tuple[np.ndarray, pd.DataFrame]:
+def load_activation_shards(
+    output_dir: str | Path, *, workers: int = 1
+) -> tuple[np.ndarray, pd.DataFrame]:
     shard_dir = Path(output_dir) / "activation_shards"
     array_paths = sorted(shard_dir.glob("shard_*.npy"))
     if not array_paths:
         raise FileNotFoundError(f"No activation shards found under {shard_dir}")
-    arrays: list[np.ndarray] = []
-    frames: list[pd.DataFrame] = []
-    expected_tail = None
-    for array_path in array_paths:
+
+    def load_shard(array_path: Path) -> tuple[np.ndarray, pd.DataFrame]:
         metadata_path = array_path.with_suffix(".csv")
         if not metadata_path.exists():
             raise FileNotFoundError(f"Missing metadata paired with {array_path}")
@@ -148,17 +149,46 @@ def load_activation_shards(output_dir: str | Path) -> tuple[np.ndarray, pd.DataF
         frame = pd.read_csv(metadata_path)
         if len(array) != len(frame):
             raise ValueError(f"Row mismatch between {array_path} and {metadata_path}")
+        return np.asarray(array), frame
+
+    loaded = ordered_parallel_map(load_shard, array_paths, workers=workers)
+    arrays = [array for array, _ in loaded]
+    frames = [frame for _, frame in loaded]
+    expected_tail = None
+    for array in arrays:
         if expected_tail is None:
             expected_tail = array.shape[1:]
         elif array.shape[1:] != expected_tail:
             raise ValueError("Activation shards have inconsistent layer/hidden dimensions")
-        arrays.append(np.asarray(array))
-        frames.append(frame)
     return np.concatenate(arrays), pd.concat(frames, ignore_index=True)
 
 
+def load_activation_metadata(output_dir: str | Path, *, workers: int = 1) -> pd.DataFrame:
+    """Load and validate shard metadata without reading activation tensor contents."""
+    shard_dir = Path(output_dir) / "activation_shards"
+    array_paths = sorted(shard_dir.glob("shard_*.npy"))
+    if not array_paths:
+        raise FileNotFoundError(f"No activation shards found under {shard_dir}")
+
+    def load_metadata(array_path: Path) -> pd.DataFrame:
+        metadata_path = array_path.with_suffix(".csv")
+        if not metadata_path.exists():
+            raise FileNotFoundError(f"Missing metadata paired with {array_path}")
+        array = np.load(array_path, mmap_mode="r")
+        frame = pd.read_csv(metadata_path)
+        if len(array) != len(frame):
+            raise ValueError(f"Row mismatch between {array_path} and {metadata_path}")
+        return frame
+
+    frames = ordered_parallel_map(load_metadata, array_paths, workers=workers)
+    return pd.concat(frames, ignore_index=True)
+
+
 def fit_and_save_probes(config: ExperimentConfig) -> ProbeResults:
-    activations, metadata = load_activation_shards(config.extraction.output_dir)
+    activations, metadata = load_activation_shards(
+        config.extraction.output_dir,
+        workers=config.analysis.workers,
+    )
     results = fit_layer_probes(
         activations,
         metadata,
@@ -206,7 +236,10 @@ def fit_and_save_probes(config: ExperimentConfig) -> ProbeResults:
 
 def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
     traces = load_traces(config.data.output_path)
-    _, metadata = load_activation_shards(config.extraction.output_dir)
+    metadata = load_activation_metadata(
+        config.extraction.output_dir,
+        workers=config.analysis.workers,
+    )
     direction_path = config.extraction.output_dir / "probes" / "directions.npz"
     if not direction_path.exists():
         raise FileNotFoundError("Run fit-probes before interventions")

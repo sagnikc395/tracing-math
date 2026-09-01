@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from causal_circuits.experiment3.analysis import (
+from tracing_math.experiment3.analysis import (
     build_matched_transition_dataset,
     fit_transition_probes,
     summarize_counterfactual_patching,

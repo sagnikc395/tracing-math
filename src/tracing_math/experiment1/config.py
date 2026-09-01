@@ -74,6 +74,7 @@ class AnalysisConfig:
     confidence_level: float = 0.95
     subgroup_min_traces: int = 20
     exploratory_bootstrap_samples: int = 250
+    workers: int = 1
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,8 @@ class ExperimentConfig:
             raise ValueError("analysis.subgroup_min_traces must be positive")
         if self.analysis.exploratory_bootstrap_samples < 0:
             raise ValueError("analysis.exploratory_bootstrap_samples cannot be negative")
+        if self.analysis.workers == 0 or self.analysis.workers < -1:
+            raise ValueError("analysis.workers must be positive or -1 for all available CPUs")
 
 
 def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
@@ -252,5 +255,6 @@ def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
             confidence_level=float(analysis.get("confidence_level", 0.95)),
             subgroup_min_traces=int(analysis.get("subgroup_min_traces", 20)),
             exploratory_bootstrap_samples=int(analysis.get("exploratory_bootstrap_samples", 250)),
+            workers=int(analysis.get("workers", 1)),
         ),
     )

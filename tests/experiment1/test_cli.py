@@ -4,7 +4,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from causal_circuits.experiment1.cli import main
+from tracing_math.experiment1.cli import main
 
 
 def test_help_lists_experiment_stages() -> None:
@@ -17,7 +17,7 @@ def test_help_lists_experiment_stages() -> None:
 
 
 def test_validate_config_command() -> None:
-    config = Path("configs/experiment.yaml").resolve()
+    config = Path("configs/experiment1.yaml").resolve()
 
     result = CliRunner().invoke(main, ["--config", str(config), "validate-config"])
 
@@ -31,3 +31,13 @@ def test_missing_config_reports_click_error() -> None:
     assert result.exit_code == 2
     assert "does not exist" in result.output
 
+
+def test_fit_probes_rejects_invalid_worker_count() -> None:
+    config = Path("configs/experiment1.yaml").resolve()
+
+    result = CliRunner().invoke(
+        main, ["--config", str(config), "fit-probes", "--workers", "0"]
+    )
+
+    assert result.exit_code == 2
+    assert "must be positive or -1" in result.output

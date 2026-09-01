@@ -13,9 +13,9 @@ import pandas as pd
 from scipy.stats import norm
 from sklearn.metrics import roc_auc_score
 
-from causal_circuits.experiment1.probes import binary_metrics, choose_threshold
-from causal_circuits.followup.config import FollowupConfig
-from causal_circuits.localization import (
+from tracing_math.experiment1.probes import binary_metrics, choose_threshold
+from tracing_math.followup.config import FollowupConfig
+from tracing_math.localization import (
     first_crossing,
     localization_metrics,
     outcome_label,

@@ -11,7 +11,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
-from causal_circuits.experiment1.probes import (
+from tracing_math.experiment1.probes import (
     binary_metrics,
     change_point_metrics,
     choose_threshold,

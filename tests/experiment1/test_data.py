@@ -2,7 +2,7 @@
 
 import pytest
 
-from causal_circuits.experiment1.data import (
+from tracing_math.experiment1.data import (
     ProcessTrace,
     assign_partitions,
     format_user_content,

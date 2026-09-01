@@ -2,7 +2,7 @@
 
 from click.testing import CliRunner
 
-from causal_circuits.followup.cli import main
+from tracing_math.followup.cli import main
 
 
 def test_help_describes_followup_without_loading_analysis() -> None:

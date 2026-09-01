@@ -2,7 +2,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from causal_circuits.experiment3.cli import main
+from tracing_math.experiment3.cli import main
 
 
 def test_extended_help_lists_restartable_stages() -> None:
@@ -15,7 +15,7 @@ def test_extended_help_lists_restartable_stages() -> None:
 
 
 def test_extended_config_validation_command() -> None:
-    config = Path("configs/experiment3_extended.yaml").resolve()
+    config = Path("configs/experiment3.yaml").resolve()
     result = CliRunner().invoke(main, ["--config", str(config), "validate-config"])
 
     assert result.exit_code == 0

@@ -12,22 +12,22 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from causal_circuits.experiment1.data import (
+from tracing_math.experiment1.data import (
     ProcessTrace,
     assign_partitions,
     iter_step_metadata,
     load_traces,
 )
-from causal_circuits.experiment1.model import HuggingFaceMathModel, TraceTooLongError
-from causal_circuits.experiment1.pipeline import load_activation_shards
-from causal_circuits.experiment1.probes import binary_metrics
-from causal_circuits.experiment3.analysis import (
+from tracing_math.experiment1.model import HuggingFaceMathModel, TraceTooLongError
+from tracing_math.experiment1.pipeline import load_activation_shards
+from tracing_math.experiment1.probes import binary_metrics
+from tracing_math.experiment3.analysis import (
     analyze_fixed_boundary_locations,
     build_matched_transition_dataset,
     fit_transition_probes,
     summarize_counterfactual_patching,
 )
-from causal_circuits.experiment3.config import ExtendedFollowupConfig
+from tracing_math.experiment3.config import ExtendedFollowupConfig
 
 BOUNDARY_LOCATIONS = ("step_content", "marker")
 PATCH_CONDITIONS = (

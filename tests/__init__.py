@@ -1,2 +1,2 @@
-"""Test suite for causal_circuits."""
+"""Test suite for tracing_math."""
 

@@ -53,10 +53,10 @@ than evidence about causal use.
 ## Commands
 
 ```bash
-uv run math-error-extended-followup --config configs/experiment3_extended.yaml validate-config
-uv run math-error-extended-followup --config configs/experiment3_extended.yaml fit-transition-probe
-uv run math-error-extended-followup --config configs/experiment3_extended.yaml extract-boundary-controls
-uv run math-error-extended-followup --config configs/experiment3_extended.yaml analyze-boundary-controls
-uv run math-error-extended-followup --config configs/experiment3_extended.yaml prepare-counterfactual-template
-uv run math-error-extended-followup --config configs/experiment3_extended.yaml run-counterfactual-patching
+uv run math-error-extended-followup --config configs/experiment3.yaml validate-config
+uv run math-error-extended-followup --config configs/experiment3.yaml fit-transition-probe
+uv run math-error-extended-followup --config configs/experiment3.yaml extract-boundary-controls
+uv run math-error-extended-followup --config configs/experiment3.yaml analyze-boundary-controls
+uv run math-error-extended-followup --config configs/experiment3.yaml prepare-counterfactual-template
+uv run math-error-extended-followup --config configs/experiment3.yaml run-counterfactual-patching
 ```

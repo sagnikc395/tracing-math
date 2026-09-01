@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from causal_circuits.experiment1.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
-from causal_circuits.experiment1.probes import (
+from tracing_math.experiment1.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
+from tracing_math.experiment1.probes import (
     binary_metrics,
     calibration_curve_table,
     change_point_metrics,
@@ -125,7 +125,7 @@ def test_layer_probe_pipeline_smoke() -> None:
         pd.DataFrame(rows),
         config,
         seed=42,
-        analysis_config=AnalysisConfig(subgroup_min_traces=2),
+        analysis_config=AnalysisConfig(subgroup_min_traces=2, workers=2),
     )
     assert result.directions.shape == (3, 6)
     assert result.selected_intervention_layer in {0, 1}
@@ -160,3 +160,36 @@ def test_bootstrap_samples_whole_traces() -> None:
     )
     assert len(result) == 10
     assert set(result.columns) >= {"auroc", "process_f1", "first_error_exact"}
+
+
+def test_parallel_bootstrap_matches_serial_results() -> None:
+    metadata = pd.DataFrame(
+        {
+            "trace_id": ["bad", "bad", "good", "good"],
+            "step_index": [0, 1, 0, 1],
+            "first_error": [1, 1, -1, -1],
+        }
+    )
+    labels = np.array([0, 1, 0, 0])
+    scores = np.array([0.1, 0.9, 0.1, 0.2])
+
+    serial = group_bootstrap_metrics(
+        metadata,
+        labels,
+        scores,
+        0.5,
+        samples=20,
+        seed=42,
+        analysis_config=AnalysisConfig(workers=1),
+    )
+    parallel = group_bootstrap_metrics(
+        metadata,
+        labels,
+        scores,
+        0.5,
+        samples=20,
+        seed=42,
+        analysis_config=AnalysisConfig(workers=2),
+    )
+
+    pd.testing.assert_frame_equal(parallel, serial)

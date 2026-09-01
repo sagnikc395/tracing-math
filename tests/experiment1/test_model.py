@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from causal_circuits.experiment1.model import HuggingFaceMathModel
+from tracing_math.experiment1.model import HuggingFaceMathModel
 
 
 class _Tokenizer:

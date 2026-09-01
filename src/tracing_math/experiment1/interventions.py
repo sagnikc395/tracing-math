@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from causal_circuits.experiment1.config import InterventionConfig
-from causal_circuits.experiment1.data import ProcessTrace
-from causal_circuits.experiment1.model import VERDICT_READOUT_ID, HuggingFaceMathModel
+from tracing_math.experiment1.config import InterventionConfig
+from tracing_math.experiment1.data import ProcessTrace
+from tracing_math.experiment1.model import VERDICT_READOUT_ID, HuggingFaceMathModel
 
 
 def random_orthogonal_directions(direction: np.ndarray, count: int, *, seed: int) -> np.ndarray:
@@ -253,10 +253,15 @@ def causal_effect_statistics(
             values = group["delta_verdict_score"].to_numpy(dtype=float)
             bootstrap_means = np.asarray([], dtype=float)
             if bootstrap_samples > 0:
-                bootstrap_means = np.asarray(
+                samples_per_chunk = max(1, 1_000_000 // len(values))
+                bootstrap_means = np.concatenate(
                     [
-                        rng.choice(values, size=len(values), replace=True).mean()
-                        for _ in range(bootstrap_samples)
+                        rng.choice(
+                            values,
+                            size=(min(samples_per_chunk, bootstrap_samples - start), len(values)),
+                            replace=True,
+                        ).mean(axis=1)
+                        for start in range(0, bootstrap_samples, samples_per_chunk)
                     ]
                 )
             rows.append(

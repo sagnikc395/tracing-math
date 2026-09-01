@@ -32,6 +32,8 @@ probe:
   pca_dimensions: []
 
 analysis:
+  # Layer fits and resampling share the activation array across worker threads. Use -1 for all CPUs.
+  workers: 4
   threshold_min: 0.05
   threshold_max: 0.95
   threshold_points: 181

@@ -1,7 +1,7 @@
-# Experiment 1 paper notebook
+# All experiments notebook
 
-[`experiment.ipynb`](experiment.ipynb) is the single Colab entry point for the experiments in the
-paper. It runs, in order:
+[`experiment.ipynb`](experiment.ipynb) is the single Colab entry point for Experiments 1--3. It
+runs, in order:
 
 1. ProcessBench download and resumable step-boundary activation extraction;
 2. Experiment A: layer-wise decoding, localization, grouped-bootstrap uncertainty, and the required
@@ -11,8 +11,9 @@ paper. It runs, in order:
    random-orthogonal controls when baseline specificity is nonzero;
 5. the three essential paper figures;
 6. publication of the frozen result package to GitHub;
-7. the CPU follow-up with length-aware thresholds and paired control intervals;
-8. a matched first-error transition probe over the original activation shards;
+7. Experiment 2, the CPU follow-up with temporal tests, length-aware thresholds, and paired control
+   intervals;
+8. Experiment 3's matched first-error transition probe over the original activation shards;
 9. resumable GPU extraction at natural step endings and artificial marker endings;
 10. annotation-gated counterfactual activation patching; and
 11. an optional, independently checkpointed 7B same-family replication.
@@ -32,11 +33,11 @@ Before starting, create a fine-grained GitHub token with **Contents: read and wr
 store it in Colab Secrets as `GITHUB_TOKEN`. Authentication uses a temporary `GIT_ASKPASS` script;
 the token is not embedded in the clone URL, Git remote, notebook source, or output.
 
-Sections 1--7 take their scientific settings from `configs/experiment.yaml`, which contains only the
-confirmatory L2 probe and Experiments A--C settings. Those sections change only persistence paths and
-runtime settings (BF16 and batch sizes) for the A100. Sections 8--14 use
-`configs/experiment3_extended.yaml`, write to a separate artifact tree, and label their analyses
-post-hoc. The 7B replication is off by default so it cannot delay the required stages accidentally.
+Sections 1--7 take their scientific settings from `configs/experiment1.yaml`, which contains only the
+confirmatory L2 probe and Experiment 1 settings. Those sections change only persistence paths and
+runtime settings (BF16 and batch sizes) for the A100. Section 9 builds Experiment 2's configuration;
+Sections 10--12 use `configs/experiment3.yaml`. Both write separate artifact trees and label
+their analyses post-hoc. The 7B replication is off by default so it cannot delay the required stages.
 
 Activation extraction and causal interventions are resumable. Re-running the notebook reuses
 complete activation shards and intervention groups. `run_status.json`, per-stage logs,

@@ -4,8 +4,8 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 
-from causal_circuits.experiment3 import pipeline
-from causal_circuits.experiment3.config import ExtendedFollowupConfig
+from tracing_math.experiment3 import pipeline
+from tracing_math.experiment3.config import ExtendedFollowupConfig
 
 
 class _PatchModel:
@@ -21,7 +21,7 @@ class _PatchModel:
 def test_counterfactual_patching_checks_baseline_then_checkpoints(
     tmp_path, monkeypatch
 ) -> None:
-    base = ExtendedFollowupConfig.from_yaml("configs/experiment3_extended.yaml")
+    base = ExtendedFollowupConfig.from_yaml("configs/experiment3.yaml")
     experiment1_dir = tmp_path / "experiment1"
     probe_dir = experiment1_dir / "probes"
     probe_dir.mkdir(parents=True)

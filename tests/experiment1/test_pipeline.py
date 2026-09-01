@@ -6,13 +6,28 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 
-from causal_circuits.experiment1 import pipeline
-from causal_circuits.experiment1.config import ExperimentConfig
-from causal_circuits.experiment1.pipeline import plot_artifacts
+from tracing_math.experiment1 import pipeline
+from tracing_math.experiment1.config import ExperimentConfig
+from tracing_math.experiment1.pipeline import load_activation_metadata, plot_artifacts
+
+
+def test_load_activation_metadata_skips_tensor_contents_and_preserves_order(tmp_path) -> None:
+    shard_dir = tmp_path / "activation_shards"
+    shard_dir.mkdir()
+    for index in (2, 1):
+        stem = shard_dir / f"shard_{index:05d}_{index:05d}"
+        np.save(stem.with_suffix(".npy"), np.full((1, 2, 3), index, dtype=np.float32))
+        pd.DataFrame({"trace_id": [f"trace-{index}"]}).to_csv(
+            stem.with_suffix(".csv"), index=False
+        )
+
+    metadata = load_activation_metadata(tmp_path, workers=2)
+
+    assert metadata["trace_id"].tolist() == ["trace-1", "trace-2"]
 
 
 def test_plot_artifacts_creates_only_essential_paper_figures(tmp_path) -> None:
-    base_config = ExperimentConfig.from_yaml("configs/experiment.yaml")
+    base_config = ExperimentConfig.from_yaml("configs/experiment1.yaml")
     config = replace(base_config, extraction=replace(base_config.extraction, output_dir=tmp_path))
     probe_dir = tmp_path / "probes"
     intervention_dir = tmp_path / "interventions"
@@ -108,7 +123,7 @@ def test_plot_artifacts_creates_only_essential_paper_figures(tmp_path) -> None:
 
 
 def test_interventions_stop_when_readout_specificity_is_zero(tmp_path, monkeypatch) -> None:
-    base_config = ExperimentConfig.from_yaml("configs/experiment.yaml")
+    base_config = ExperimentConfig.from_yaml("configs/experiment1.yaml")
     config = replace(base_config, extraction=replace(base_config.extraction, output_dir=tmp_path))
     probe_dir = tmp_path / "probes"
     probe_dir.mkdir()
@@ -132,7 +147,7 @@ def test_interventions_stop_when_readout_specificity_is_zero(tmp_path, monkeypat
         }
     )
     monkeypatch.setattr(pipeline, "load_traces", lambda _path: [])
-    monkeypatch.setattr(pipeline, "load_activation_shards", lambda _path: (np.empty(0), metadata))
+    monkeypatch.setattr(pipeline, "load_activation_metadata", lambda _path, **_kwargs: metadata)
     monkeypatch.setattr(pipeline, "HuggingFaceMathModel", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(pipeline, "score_intervention_baseline", lambda *_args, **_kwargs: baseline)
 

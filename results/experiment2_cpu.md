@@ -129,7 +129,7 @@ failed its behavioral prerequisite even though its mean-effect confidence interv
 Run the complete follow-up locally with:
 
 ```bash
-math-error-cpu-followup --config configs/experiment2_cpu.yaml
+math-error-cpu-followup --config configs/experiment2.yaml
 ```
 
 On the development machine, the full run took about 37 seconds after the one-time Matplotlib font

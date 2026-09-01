@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from causal_circuits.experiment1.data import SYSTEM_PROMPT, ProcessTrace, format_user_content
+from tracing_math.experiment1.data import SYSTEM_PROMPT, ProcessTrace, format_user_content
 
 VERDICT_READOUT_ID = "step-error-yes-no-v1"
 VERDICT_SYSTEM_PROMPT = (

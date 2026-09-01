@@ -45,7 +45,7 @@ fit trace-length-bin thresholds without test-label tuning and to bootstrap probe
 differences by trace. The compact result package predates these files, so no new numerical claim has
 been added to the paper.
 
-The separate extended follow-up uses `configs/experiment3_extended.yaml` and the
+The separate extended follow-up uses `configs/experiment3.yaml` and the
 `math-error-extended-followup` command. It does not change the frozen Experiment 1 split, target,
 layer-selection rule, or intervention doses. Transition probing and boundary-location comparisons
 are marked post-hoc. Counterfactual patching accepts only rows explicitly marked `verified`; the
@@ -134,7 +134,7 @@ invalid.
 │   ├── experiment2_cpu.yaml     # CPU follow-up resampling and output settings
 │   └── experiment3_extended.yaml  # extended post-hoc experiment settings
 ├── data/processed/              # downloaded ProcessBench JSONL; ignored by Git
-├── src/causal_circuits/
+├── src/tracing_math/
 │   ├── experiment1/
 │   │   ├── config.py            # typed scientific configuration
 │   │   ├── data.py              # ProcessBench loading, prompts, and grouped splits
@@ -179,7 +179,7 @@ go through the two console commands rather than importing CLI internals.
 Large activation shards, downloaded data, and runtime artifacts are intentionally excluded from
 Git. This workspace currently contains a compact Experiment 1 snapshot under
 `artifacts/experiment1/qwen2.5-math-1.5b`; the pipeline's canonical Experiment 1 output path is
-`artifacts/qwen2.5-math-1.5b`, as set in `configs/experiment.yaml`.
+`artifacts/qwen2.5-math-1.5b`, as set in `configs/experiment1.yaml`.
 
 ## Installation and verification
 
@@ -209,34 +209,48 @@ resumable; incompatible dataset/model/configuration identities are rejected.
 For a local run:
 
 ```bash
-math-error-tracing --config configs/experiment.yaml validate-config
-math-error-tracing --config configs/experiment.yaml download-data
-math-error-tracing --config configs/experiment.yaml extract-activations
-math-error-tracing --config configs/experiment.yaml fit-probes
-math-error-tracing --config configs/experiment.yaml run-interventions
-math-error-tracing --config configs/experiment.yaml plot
+math-error-tracing --config configs/experiment1.yaml validate-config
+math-error-tracing --config configs/experiment1.yaml download-data
+math-error-tracing --config configs/experiment1.yaml extract-activations
+math-error-tracing --config configs/experiment1.yaml fit-probes
+math-error-tracing --config configs/experiment1.yaml run-interventions
+math-error-tracing --config configs/experiment1.yaml plot
 ```
 
 Or run the sequence with:
 
 ```bash
-math-error-tracing --config configs/experiment.yaml run-all
+math-error-tracing --config configs/experiment1.yaml run-all
 ```
 
 The global `--config` option must precede the subcommand. The completed paper run used BF16 and an
 activation-extraction batch size of 16 on an A100; the notebook applies those runtime settings and
 records the resolved configuration with the artifacts.
 
+Probe fitting can run independent layer, source-transfer, PCA, and bootstrap jobs concurrently.
+Set `analysis.workers` in the YAML file, or override it for the CPU-heavy stages:
+
+```bash
+math-error-tracing --config configs/experiment1.yaml fit-probes --workers 4
+math-error-tracing --config configs/experiment1.yaml run-all --workers -1
+```
+
+`-1` uses every available CPU. A smaller fixed value is safer when activation arrays are large,
+because each concurrent fit needs its own temporary working memory. GPU extraction and intervention
+throughput use `extraction.batch_size` and `intervention.batch_size`, respectively; increase those
+until GPU memory is well utilized. Intervention runs now read only shard metadata rather than
+loading the activation tensors again.
+
 ## Run Experiment 2
 
 Experiment 2 is the CPU-only follow-up. It reads the frozen Experiment 1 outputs and does not load
 the language model or activation shards. Before running it, check that the paths configured in
-`configs/experiment2_cpu.yaml` point to the compact Experiment 1 artifact directory and the
+`configs/experiment2.yaml` point to the compact Experiment 1 artifact directory and the
 processed ProcessBench JSONL. The default paths are `artifacts/experiment1/qwen2.5-math-1.5b` and
 `data/processed/processbench.jsonl`.
 
 ```bash
-uv run math-error-cpu-followup --config configs/experiment2_cpu.yaml
+uv run math-error-cpu-followup --config configs/experiment2.yaml
 ```
 
 The command runs the temporal, subgroup, sensitivity, and failure-case analyses and writes the

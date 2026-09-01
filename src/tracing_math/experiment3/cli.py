@@ -7,14 +7,14 @@ from pathlib import Path
 
 import click
 
-from causal_circuits.experiment3.config import ExtendedFollowupConfig
+from tracing_math.experiment3.config import ExtendedFollowupConfig
 
 
 @click.group()
 @click.option(
     "--config",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=Path("configs/experiment3_extended.yaml"),
+    default=Path("configs/experiment3.yaml"),
     show_default=True,
 )
 @click.pass_context
@@ -32,7 +32,7 @@ def validate_config(config: ExtendedFollowupConfig) -> None:
 @main.command("fit-transition-probe")
 @click.pass_obj
 def fit_transition(config: ExtendedFollowupConfig) -> None:
-    from causal_circuits.experiment3.pipeline import fit_and_save_transition_probe
+    from tracing_math.experiment3.pipeline import fit_and_save_transition_probe
 
     click.echo(json.dumps(fit_and_save_transition_probe(config), indent=2))
 
@@ -40,7 +40,7 @@ def fit_transition(config: ExtendedFollowupConfig) -> None:
 @main.command("extract-boundary-controls")
 @click.pass_obj
 def extract_boundaries(config: ExtendedFollowupConfig) -> None:
-    from causal_circuits.experiment3.pipeline import extract_boundary_control_shards
+    from tracing_math.experiment3.pipeline import extract_boundary_control_shards
 
     click.echo(json.dumps(extract_boundary_control_shards(config), indent=2))
 
@@ -48,7 +48,7 @@ def extract_boundaries(config: ExtendedFollowupConfig) -> None:
 @main.command("analyze-boundary-controls")
 @click.pass_obj
 def analyze_boundaries(config: ExtendedFollowupConfig) -> None:
-    from causal_circuits.experiment3.pipeline import analyze_boundary_controls
+    from tracing_math.experiment3.pipeline import analyze_boundary_controls
 
     click.echo(json.dumps(analyze_boundary_controls(config), indent=2))
 
@@ -57,7 +57,7 @@ def analyze_boundaries(config: ExtendedFollowupConfig) -> None:
 @click.option("--force", is_flag=True, help="Replace an existing unannotated template.")
 @click.pass_obj
 def prepare_counterfactuals(config: ExtendedFollowupConfig, force: bool) -> None:
-    from causal_circuits.experiment3.pipeline import prepare_counterfactual_template
+    from tracing_math.experiment3.pipeline import prepare_counterfactual_template
 
     click.echo(str(prepare_counterfactual_template(config, force=force)))
 
@@ -65,7 +65,7 @@ def prepare_counterfactuals(config: ExtendedFollowupConfig, force: bool) -> None
 @main.command("run-counterfactual-patching")
 @click.pass_obj
 def patch_counterfactuals(config: ExtendedFollowupConfig) -> None:
-    from causal_circuits.experiment3.pipeline import run_counterfactual_patching
+    from tracing_math.experiment3.pipeline import run_counterfactual_patching
 
     click.echo(json.dumps(run_counterfactual_patching(config), indent=2))
 
