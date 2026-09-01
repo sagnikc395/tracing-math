@@ -210,3 +210,4 @@ Human prose has positive characteristics that AI rarely reproduces:
 ## Reference
 
 For the complete guide with full examples, structural patterns, and the exhaustive vocabulary reference, see [REFERENCE.md](REFERENCE.md).
+After making the changes, check up with [REBUTTAL-SKILL](./SKILL2.md) to rank and improve this.
