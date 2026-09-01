@@ -129,6 +129,12 @@ def test_layer_probe_pipeline_smoke() -> None:
     )
     assert result.directions.shape == (3, 6)
     assert result.selected_intervention_layer in {0, 1}
+    assert set(result.fit_predictions["partition"]) == {"train", "validation"}
+    assert set(result.control_predictions["control"]) == {
+        "position",
+        "current-step TF-IDF",
+        "shuffled-label hidden",
+    }
     assert len(result.transfer) == 4
     assert set(result.family_metrics["family"]) == {"l2", "l1", "elastic_net"}
     assert set(result.diagnostic_metrics["target"]) == {"error_onset"}

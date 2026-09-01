@@ -125,6 +125,7 @@ def test_interventions_batch_and_resume_from_group_checkpoints() -> None:
     assert all(batch_size == 2 for _size, batch_size, _magnitude in model.calls)
     assert len(checkpoints) == 7
     assert len(result) == 28
+    assert result["readout_id"].nunique() == 1
     assert not result.duplicated(
         ["trace_id", "step_index", "direction_type", "direction_index", "alpha"]
     ).any()

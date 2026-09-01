@@ -46,6 +46,7 @@ intervention:
   alphas: [-4, -2, -1, 0, 1, 2, 4]
   examples_per_class: 128
   random_directions: 20
-  correct_answer: " CORRECT"
-  incorrect_answer: " INCORRECT"
+  # The verdict question asks whether the displayed step contains an error.
+  correct_answer: " No"
+  incorrect_answer: " Yes"
   batch_size: 1

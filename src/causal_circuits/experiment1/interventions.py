@@ -10,7 +10,7 @@ from scipy.stats import spearmanr
 
 from causal_circuits.experiment1.config import InterventionConfig
 from causal_circuits.experiment1.data import ProcessTrace
-from causal_circuits.experiment1.model import HuggingFaceMathModel
+from causal_circuits.experiment1.model import VERDICT_READOUT_ID, HuggingFaceMathModel
 
 
 def random_orthogonal_directions(direction: np.ndarray, count: int, *, seed: int) -> np.ndarray:
@@ -25,6 +25,35 @@ def random_orthogonal_directions(direction: np.ndarray, count: int, *, seed: int
         vector /= np.linalg.norm(vector)
         controls.append(vector.astype(np.float32))
     return np.stack(controls) if controls else np.empty((0, len(direction)), dtype=np.float32)
+
+
+def score_intervention_baseline(
+    model: HuggingFaceMathModel,
+    traces: Sequence[ProcessTrace],
+    metadata: pd.DataFrame,
+    *,
+    config: InterventionConfig,
+    target: str,
+    seed: int,
+) -> pd.DataFrame:
+    """Score the balanced held-out assay sample without an intervention."""
+    test = metadata[metadata["partition"] == "test"].copy()
+    selected = _balanced_sample(test, target, config.examples_per_class, seed)
+    trace_lookup = {trace.trace_id: trace for trace in traces}
+    missing = set(selected["trace_id"]).difference(trace_lookup)
+    if missing:
+        raise ValueError(f"Missing {len(missing)} intervention traces from the local dataset")
+    selected_rows = list(selected.itertuples(index=False))
+    scores = model.verdict_scores(
+        [(trace_lookup[row.trace_id], int(row.step_index)) for row in selected_rows],
+        correct_answer=config.correct_answer,
+        incorrect_answer=config.incorrect_answer,
+        batch_size=config.batch_size,
+    )
+    return pd.DataFrame(
+        _intervention_row(row, "learned", -1, 0.0, score, score)
+        for row, score in zip(selected_rows, scores, strict=True)
+    )
 
 
 def run_interventions(
@@ -52,6 +81,8 @@ def run_interventions(
     rows: list[dict[str, object]] = (
         [] if existing_results is None else existing_results.to_dict(orient="records")
     )
+    if rows and {str(row.get("readout_id")) for row in rows} != {VERDICT_READOUT_ID}:
+        raise ValueError("Existing intervention checkpoint uses a different verdict readout")
 
     def checkpoint() -> None:
         if checkpoint_callback is not None:
@@ -347,6 +378,7 @@ def _balanced_sample(frame: pd.DataFrame, target: str, per_class: int, seed: int
 
 def _intervention_row(row, direction_type, direction_index, alpha, score, baseline):
     return {
+        "readout_id": VERDICT_READOUT_ID,
         "trace_id": row.trace_id,
         "source": row.source,
         "step_index": int(row.step_index),

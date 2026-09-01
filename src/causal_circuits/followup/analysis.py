@@ -13,6 +13,7 @@ import pandas as pd
 from scipy.stats import norm
 from sklearn.metrics import roc_auc_score
 
+from causal_circuits.experiment1.probes import binary_metrics, choose_threshold
 from causal_circuits.followup.config import FollowupConfig
 from causal_circuits.localization import (
     first_crossing,
@@ -76,6 +77,45 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     )
     centered.to_csv(output / "within_trace_discrimination.csv", index=False)
 
+    availability: dict[str, str] = {}
+    fit_predictions_path = config.experiment1_dir / "probes" / "fit_predictions.csv"
+    if fit_predictions_path.exists():
+        fit_predictions = pd.read_csv(fit_predictions_path)
+        length_thresholds, length_results = length_aware_threshold_analysis(
+            fit_predictions,
+            predictions,
+            global_threshold=threshold,
+        )
+        length_thresholds.to_csv(output / "length_aware_thresholds.csv", index=False)
+        length_results.to_csv(output / "length_aware_threshold_results.csv", index=False)
+        availability["length_aware_thresholding"] = "complete"
+    else:
+        length_results = pd.DataFrame()
+        availability["length_aware_thresholding"] = (
+            "not run: probes/fit_predictions.csv is absent; test labels were not used for tuning"
+        )
+
+    control_predictions_path = config.experiment1_dir / "probes" / "control_predictions.csv"
+    if control_predictions_path.exists():
+        control_predictions = pd.read_csv(control_predictions_path)
+        paired_controls = paired_probe_control_intervals(
+            predictions,
+            control_predictions,
+            probe_threshold=threshold,
+            samples=config.bootstrap_samples,
+            seed=config.seed,
+            confidence_level=config.confidence_level,
+        )
+        paired_controls.to_csv(output / "probe_control_paired_intervals.csv", index=False)
+        availability["probe_control_paired_intervals"] = "complete"
+    else:
+        paired_controls = pd.DataFrame()
+        availability["probe_control_paired_intervals"] = (
+            "not run: probes/control_predictions.csv is absent; aggregate control metrics "
+            "cannot be paired"
+        )
+    (output / "analysis_availability.json").write_text(json.dumps(availability, indent=2))
+
     subgroups = subgroup_outcomes(
         traces,
         threshold=threshold,
@@ -109,12 +149,178 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         placebo=placebo,
         centered=centered,
         sensitivity=sensitivity,
+        length_results=length_results,
+        paired_controls=paired_controls,
+        availability=availability,
         audit_path=audit_path,
         config=config,
     )
     (output / "summary.json").write_text(json.dumps(summary, indent=2))
     (output / "results.md").write_text(_results_markdown(summary, placebo, centered, sensitivity))
     return summary
+
+
+def length_aware_threshold_analysis(
+    fit_predictions: pd.DataFrame,
+    test_predictions: pd.DataFrame,
+    *,
+    global_threshold: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fit trace-length-bin thresholds on train+validation and evaluate once on test."""
+    required = {"trace_id", "step_index", "first_error", "n_steps", "label", "score"}
+    for name, frame in (("fit", fit_predictions), ("test", test_predictions)):
+        missing = required.difference(frame.columns)
+        if missing:
+            raise ValueError(f"Missing {name} prediction columns: {sorted(missing)}")
+        if frame.duplicated(["trace_id", "step_index"]).any():
+            raise ValueError(f"{name} predictions must be unique by trace and step")
+    if "partition" not in fit_predictions:
+        raise ValueError("Fit predictions must identify train and validation partitions")
+    partitions = set(fit_predictions["partition"].astype(str))
+    if not partitions or not partitions.issubset({"train", "validation"}):
+        raise ValueError("Length thresholds may only use train and validation predictions")
+
+    fit = fit_predictions.copy()
+    test = test_predictions.copy()
+    edges, labels = _length_bin_specification(fit)
+    fit["length_bin"] = pd.cut(
+        fit["n_steps"], bins=edges, labels=labels, include_lowest=True
+    ).astype(str)
+    test["length_bin"] = pd.cut(
+        test["n_steps"], bins=edges, labels=labels, include_lowest=True
+    ).astype(str)
+
+    threshold_rows = []
+    threshold_by_bin: dict[str, float] = {}
+    for index, label in enumerate(labels):
+        group = fit[fit["length_bin"] == label]
+        trace_labels = group.drop_duplicates("trace_id")["first_error"].ge(0)
+        usable = not group.empty and trace_labels.nunique() == 2
+        threshold = (
+            choose_threshold(group, group["score"].to_numpy())
+            if usable
+            else float(global_threshold)
+        )
+        threshold_by_bin[label] = threshold
+        threshold_rows.append(
+            {
+                "length_bin": label,
+                "lower_n_steps": edges[index],
+                "upper_n_steps": edges[index + 1],
+                "threshold": threshold,
+                "fit_traces": group["trace_id"].nunique(),
+                "status": "fit" if usable else "global_fallback",
+            }
+        )
+
+    global_metrics = _thresholded_process_metrics(
+        test, np.full(len(test), global_threshold, dtype=float)
+    )
+    length_metrics = _thresholded_process_metrics(
+        test, test["length_bin"].map(threshold_by_bin).to_numpy(dtype=float)
+    )
+    metric_names = ("process_f1", "correct_rejection", "error_exact", "complete_accuracy")
+    results = pd.DataFrame(
+        [
+            {
+                "metric": metric,
+                "global_threshold": global_metrics[metric],
+                "length_aware": length_metrics[metric],
+                "difference": length_metrics[metric] - global_metrics[metric],
+            }
+            for metric in metric_names
+        ]
+    )
+    return pd.DataFrame(threshold_rows), results
+
+
+def paired_probe_control_intervals(
+    probe_predictions: pd.DataFrame,
+    control_predictions: pd.DataFrame,
+    *,
+    probe_threshold: float,
+    samples: int,
+    seed: int,
+    confidence_level: float,
+) -> pd.DataFrame:
+    """Whole-trace paired bootstrap intervals for probe-minus-control metrics."""
+    if samples < 1:
+        raise ValueError("bootstrap samples must be positive")
+    required = {"trace_id", "step_index", "first_error", "label", "score"}
+    missing_probe = required.difference(probe_predictions.columns)
+    missing_control = (required | {"control", "threshold"}).difference(
+        control_predictions.columns
+    )
+    if missing_probe or missing_control:
+        raise ValueError(
+            "Missing paired prediction columns: "
+            f"probe={sorted(missing_probe)}, control={sorted(missing_control)}"
+        )
+
+    rng = np.random.default_rng(seed)
+    tail = (1 - confidence_level) / 2
+    rows = []
+    keys = ["trace_id", "step_index"]
+    probe = probe_predictions[list(required)].rename(
+        columns={"score": "probe_score", "label": "probe_label", "first_error": "probe_error"}
+    )
+    for control_name, control in control_predictions.groupby("control", sort=True):
+        if control["threshold"].nunique() != 1:
+            raise ValueError(f"Control {control_name!r} has multiple held-out thresholds")
+        merged = probe.merge(
+            control[list(required | {"threshold"})].rename(
+                columns={
+                    "score": "control_score",
+                    "label": "control_label",
+                    "first_error": "control_error",
+                }
+            ),
+            on=keys,
+            validate="one_to_one",
+        )
+        if len(merged) != len(probe_predictions):
+            raise ValueError(f"Control {control_name!r} is missing held-out prediction rows")
+        if not (
+            merged["probe_label"].eq(merged["control_label"]).all()
+            and merged["probe_error"].eq(merged["control_error"]).all()
+        ):
+            raise ValueError(f"Control {control_name!r} labels do not match probe labels")
+        control_threshold = float(merged["threshold"].iloc[0])
+        point = _probe_minus_control_metrics(merged, probe_threshold, control_threshold)
+        groups = {trace_id: group for trace_id, group in merged.groupby("trace_id", sort=False)}
+        trace_ids = np.asarray(list(groups))
+        draws: dict[str, list[float]] = {metric: [] for metric in point}
+        for _ in range(samples):
+            pieces = []
+            for draw_index, trace_id in enumerate(
+                rng.choice(trace_ids, size=len(trace_ids), replace=True)
+            ):
+                piece = groups[trace_id].copy()
+                piece["trace_id"] = f"bootstrap-{draw_index}"
+                pieces.append(piece)
+            draw = _probe_minus_control_metrics(
+                pd.concat(pieces, ignore_index=True), probe_threshold, control_threshold
+            )
+            for metric, value in draw.items():
+                if np.isfinite(value):
+                    draws[metric].append(value)
+        for metric, estimate in point.items():
+            values = np.asarray(draws[metric], dtype=float)
+            ci_low, ci_high = quantile_interval(values, tail)
+            rows.append(
+                {
+                    "control": control_name,
+                    "metric": metric,
+                    "probe_minus_control": estimate,
+                    "ci_low": ci_low,
+                    "ci_high": ci_high,
+                    "confidence_level": confidence_level,
+                    "bootstrap_unit": "trace",
+                    "bootstrap_samples": samples,
+                    "n_traces": len(trace_ids),
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def temporal_randomization_test(
@@ -682,6 +888,71 @@ def _outcome_summary(frame: pd.DataFrame) -> dict[str, float]:
     }
 
 
+def _length_bin_specification(frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
+    trace_lengths = frame.drop_duplicates("trace_id")["n_steps"].to_numpy(dtype=float)
+    edges = np.unique(np.quantile(trace_lengths, [0.0, 0.25, 0.5, 0.75, 1.0]))
+    if len(edges) < 2:
+        edges = np.asarray([-np.inf, np.inf])
+    else:
+        edges[0], edges[-1] = -np.inf, np.inf
+    labels = [f"Q{index + 1}" for index in range(len(edges) - 1)]
+    return edges, labels
+
+
+def _thresholded_process_metrics(
+    frame: pd.DataFrame, row_thresholds: np.ndarray
+) -> dict[str, float]:
+    if len(frame) != len(row_thresholds):
+        raise ValueError("A threshold is required for every prediction row")
+    work = frame[["trace_id", "step_index", "first_error", "score"]].copy()
+    work["threshold"] = np.asarray(row_thresholds, dtype=float)
+    expected, predicted = [], []
+    for _, trace in work.groupby("trace_id", sort=False):
+        ordered = trace.sort_values("step_index")
+        crossings = ordered["score"].to_numpy() >= ordered["threshold"].to_numpy()
+        expected.append(int(ordered["first_error"].iloc[0]))
+        predicted.append(
+            int(ordered.loc[crossings, "step_index"].iloc[0]) if crossings.any() else -1
+        )
+    metrics = localization_metrics(np.asarray(expected), np.asarray(predicted))
+    return {
+        "process_f1": metrics["process_f1"],
+        "correct_rejection": metrics["correct_accuracy"],
+        "error_exact": metrics["error_accuracy"],
+        "complete_accuracy": metrics["first_error_exact"],
+    }
+
+
+def _probe_minus_control_metrics(
+    frame: pd.DataFrame, probe_threshold: float, control_threshold: float
+) -> dict[str, float]:
+    metadata = frame[["trace_id", "step_index", "probe_error"]].rename(
+        columns={"probe_error": "first_error"}
+    )
+    labels = frame["probe_label"].to_numpy(dtype=int)
+    probe_scores = frame["probe_score"].to_numpy(dtype=float)
+    control_scores = frame["control_score"].to_numpy(dtype=float)
+    probe_binary = binary_metrics(labels, probe_scores, threshold=probe_threshold)
+    control_binary = binary_metrics(labels, control_scores, threshold=control_threshold)
+    probe_process = _thresholded_process_metrics(
+        metadata.assign(score=probe_scores), np.full(len(frame), probe_threshold)
+    )
+    control_process = _thresholded_process_metrics(
+        metadata.assign(score=control_scores), np.full(len(frame), control_threshold)
+    )
+    return {
+        "auroc": probe_binary["auroc"] - control_binary["auroc"],
+        "average_precision": (
+            probe_binary["average_precision"] - control_binary["average_precision"]
+        ),
+        "step_f1": probe_binary["step_f1"] - control_binary["step_f1"],
+        **{
+            metric: probe_process[metric] - control_process[metric]
+            for metric in probe_process
+        },
+    }
+
+
 def _plot_followup(
     trajectory: pd.DataFrame,
     permutation_draws: pd.DataFrame,
@@ -719,6 +990,9 @@ def _build_summary(
     placebo: pd.DataFrame,
     centered: pd.DataFrame,
     sensitivity: pd.DataFrame,
+    length_results: pd.DataFrame,
+    paired_controls: pd.DataFrame,
+    availability: dict[str, str],
     audit_path: Path,
     config: FollowupConfig,
 ) -> dict[str, Any]:
@@ -728,13 +1002,14 @@ def _build_summary(
     verdict = json.loads(
         (config.experiment1_dir / "interventions" / "behavioral_verdict.json").read_text()
     )
-    return {
+    summary = {
         "status": "complete",
         "analysis_type": "post_hoc_cpu_followup_on_frozen_experiment1_outputs",
         "selected_layer": int(predictions["layer"].iloc[0]),
         "threshold": threshold,
         "test_rows": len(predictions),
         "test_traces": int(predictions["trace_id"].nunique()),
+        "confidence_level": config.confidence_level,
         "temporal_randomization": {
             "observed_exact": _metric_value(permutation_lookup, "first_error_exact", "observed"),
             "null_exact_mean": _metric_value(permutation_lookup, "first_error_exact", "null_mean"),
@@ -790,6 +1065,22 @@ def _build_summary(
         "failure_audit_sample": str(audit_path),
         "output_dir": str(config.output_dir),
     }
+    summary["analysis_availability"] = availability
+    if not length_results.empty:
+        length_lookup = length_results.set_index("metric")
+        summary["length_aware_thresholding"] = {
+            "global_process_f1": _metric_value(length_lookup, "process_f1", "global_threshold"),
+            "length_aware_process_f1": _metric_value(length_lookup, "process_f1", "length_aware"),
+            "global_correct_rejection": _metric_value(
+                length_lookup, "correct_rejection", "global_threshold"
+            ),
+            "length_aware_correct_rejection": _metric_value(
+                length_lookup, "correct_rejection", "length_aware"
+            ),
+        }
+    if not paired_controls.empty:
+        summary["probe_control_paired_intervals"] = paired_controls.to_dict(orient="records")
+    return summary
 
 
 def _metric_value(frame: pd.DataFrame, metric: str, column: str = "estimate") -> float:
@@ -806,6 +1097,32 @@ def _results_markdown(
     matched = summary["matched_placebo"]
     within = summary["within_trace_discrimination"]
     causal = summary["causal_assay"]
+    availability = summary["analysis_availability"]
+    if "length_aware_thresholding" in summary:
+        length = summary["length_aware_thresholding"]
+        length_section = f"""## Length-aware thresholding
+
+Thresholds fitted within train+validation trace-length bins changed test Process F1 from
+{length["global_process_f1"]:.3f} to {length["length_aware_process_f1"]:.3f} and correct rejection
+from {length["global_correct_rejection"]:.3f} to
+{length["length_aware_correct_rejection"]:.3f}.
+"""
+    else:
+        length_section = (
+            "## Length-aware thresholding\n\n"
+            f"{availability['length_aware_thresholding']}.\n"
+        )
+    if "probe_control_paired_intervals" in summary:
+        paired_section = (
+            "## Probe-versus-control paired intervals\n\n"
+            "Whole-trace paired bootstrap intervals are in "
+            "`probe_control_paired_intervals.csv`.\n"
+        )
+    else:
+        paired_section = (
+            "## Probe-versus-control paired intervals\n\n"
+            f"{availability['probe_control_paired_intervals']}.\n"
+        )
     return f"""# CPU-only follow-up results
 
 This analysis reuses the frozen Experiment 1 test predictions and intervention tables. It does not
@@ -841,6 +1158,10 @@ The unmodified verdict score had AUROC {causal["baseline_auroc"]:.3f} and specif
 {causal["baseline_specificity"]:.3f}. The smallest approximate effect detectable with 80% power
 across the tested doses was {causal["smallest_mde_80pct"]:.5f} verdict-margin units. Statistical
 sensitivity does not repair a readout that fails to distinguish valid from invalid boundaries.
+
+{length_section}
+
+{paired_section}
 
 ## Files
 

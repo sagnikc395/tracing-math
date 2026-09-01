@@ -9,9 +9,10 @@ The project uses `Qwen/Qwen2.5-Math-1.5B-Instruct` and the 3,400-example
 the NeurIPS 2026 [Interpretability for Discovery](https://interpretability4discovery.github.io/)
 workshop.
 
-## Current status — August 31, 2026
+## Current status — September 1, 2026
 
-**Experiment 1 and the CPU-only post-hoc follow-up are complete.**
+**The reported Experiment 1 and original CPU follow-up are complete. Three added analyses are
+implemented but await the required compute artifacts.**
 
 The Experiment 1 analysis, compact result package, three paper figures, detailed result report, and
 compiled manuscript are complete. The follow-up reuses frozen Experiment 1 predictions and causal
@@ -24,12 +25,21 @@ It does not load the language model or extract new activations.
 | Experiment 1 data, extraction, probes, controls, and interventions | Complete |
 | Experiment 1 report and frozen result tables | Complete |
 | NeurIPS manuscript, PDF, and three figures | Complete |
-| CPU-only follow-up implementation | Complete |
-| CPU-only follow-up run and interpretation | Complete |
+| Original CPU-only follow-up run and interpretation | Complete |
+| Yes/No verdict baseline and gated intervention rerun | Implemented; GPU rerun pending |
+| Length-aware thresholds and paired probe-control intervals | Implemented; frozen fit/control predictions pending |
 
 The compiled PDF is [paper/neurips_2026.pdf](paper/neurips_2026.pdf). The full Experiment 1 report
 is [results/experiment1.md](results/experiment1.md), and the CPU follow-up report is
 [results/experiment2_cpu.md](results/experiment2_cpu.md).
+
+The corrected verdict asks whether the reasoning prefix contains an error and scores the
+single-token `Yes` and `No` responses. `run-interventions` evaluates this baseline on the balanced
+held-out assay sample and stops before any dose response when specificity is zero. Probe fitting now
+saves train+validation scores and per-example control scores. The CPU follow-up uses those files to
+fit trace-length-bin thresholds without test-label tuning and to bootstrap probe-minus-control
+differences by trace. The compact result package predates these files, so no new numerical claim has
+been added to the paper.
 
 ## Experiment 1 results
 

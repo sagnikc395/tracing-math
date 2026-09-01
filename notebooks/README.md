@@ -7,7 +7,8 @@ paper. It runs, in order:
 2. Experiment A: layer-wise decoding, localization, grouped-bootstrap uncertainty, and the required
    position, lexical, shuffled-label, embedding-state, and within-error-trace controls;
 3. Experiment B: the complete cross-domain transfer matrix; and
-4. Experiment C: the signed causal dose response and matched random-orthogonal controls;
+4. Experiment C: a gated Yes/No verdict baseline, then the signed causal dose response and matched
+   random-orthogonal controls when baseline specificity is nonzero;
 5. the three essential paper figures; and
 6. publication of the final result package to GitHub.
 

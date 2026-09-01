@@ -41,7 +41,9 @@ PREDICTION_COLUMNS = [
 class ProbeResults:
     metrics: pd.DataFrame
     predictions: pd.DataFrame
+    fit_predictions: pd.DataFrame
     controls: pd.DataFrame
+    control_predictions: pd.DataFrame
     transfer: pd.DataFrame
     pca_curve: pd.DataFrame
     bootstrap: pd.DataFrame
@@ -216,6 +218,7 @@ def fit_layer_probes(
     selected_cs = np.zeros(n_layers, dtype=np.float32)
     metrics_rows: list[dict[str, object]] = []
     prediction_rows: list[pd.DataFrame] = []
+    fit_prediction_rows: list[pd.DataFrame] = []
     validation_prediction_rows: list[pd.DataFrame] = []
     primary_family = next(
         family for family in config.families if family.name == config.primary_family
@@ -259,6 +262,7 @@ def fit_layer_probes(
         scaler, classifier = _fit_logistic(
             x[fit_mask], labels[fit_mask], best_c, config.max_iter, seed
         )
+        fit_scores = classifier.predict_proba(scaler.transform(x[fit_mask]))[:, 1]
         test_scores = classifier.predict_proba(scaler.transform(x[masks["test"]]))[:, 1]
         direction = classifier.coef_[0] / scaler.scale_
         norm = np.linalg.norm(direction)
@@ -300,6 +304,12 @@ def fit_layer_probes(
         layer_predictions["label"] = labels[masks["test"]]
         layer_predictions["score"] = test_scores
         prediction_rows.append(layer_predictions)
+        layer_fit_predictions = metadata.loc[fit_mask, PREDICTION_COLUMNS].copy()
+        layer_fit_predictions["partition"] = metadata.loc[fit_mask, "partition"]
+        layer_fit_predictions["layer"] = layer
+        layer_fit_predictions["label"] = labels[fit_mask]
+        layer_fit_predictions["score"] = fit_scores
+        fit_prediction_rows.append(layer_fit_predictions)
         if analysis_config.exploratory_bootstrap_samples > 0:
             validation_predictions = metadata.loc[
                 masks["validation"],
@@ -318,7 +328,7 @@ def fit_layer_probes(
     eligible = validation[validation["layer"] < n_layers - 1]
     selected_intervention_layer = int(eligible.iloc[0]["layer"])
 
-    controls = evaluate_controls(
+    controls, control_predictions = _evaluate_controls(
         np.asarray(activations[:, selected_layer, :], dtype=np.float32),
         metadata,
         labels,
@@ -348,6 +358,10 @@ def fit_layer_probes(
     selected_predictions = pd.concat(prediction_rows, ignore_index=True)
     selected_predictions = selected_predictions[
         selected_predictions["layer"] == selected_layer
+    ].copy()
+    selected_fit_predictions = pd.concat(fit_prediction_rows, ignore_index=True)
+    selected_fit_predictions = selected_fit_predictions[
+        selected_fit_predictions["layer"] == selected_layer
     ].copy()
     bootstrap = group_bootstrap_metrics(
         selected_predictions,
@@ -420,7 +434,9 @@ def fit_layer_probes(
     return ProbeResults(
         metrics=metrics,
         predictions=pd.concat(prediction_rows, ignore_index=True),
+        fit_predictions=selected_fit_predictions,
         controls=controls,
+        control_predictions=control_predictions,
         transfer=transfer,
         pca_curve=pca_curve,
         bootstrap=bootstrap,
@@ -1100,15 +1116,35 @@ def evaluate_controls(
     seed: int,
     analysis_config: AnalysisConfig | None = None,
 ) -> pd.DataFrame:
+    """Fit controls and return their aggregate held-out metrics."""
+    return _evaluate_controls(
+        hidden,
+        metadata,
+        labels,
+        max_iter=max_iter,
+        seed=seed,
+        analysis_config=analysis_config,
+    )[0]
+
+
+def _evaluate_controls(
+    hidden: np.ndarray,
+    metadata: pd.DataFrame,
+    labels: np.ndarray,
+    *,
+    max_iter: int,
+    seed: int,
+    analysis_config: AnalysisConfig | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     analysis_config = analysis_config or AnalysisConfig()
     train = metadata["partition"].eq("train").to_numpy()
     validation = metadata["partition"].eq("validation").to_numpy()
     test = metadata["partition"].eq("test").to_numpy()
     rows: list[dict[str, object]] = []
+    prediction_rows: list[pd.DataFrame] = []
 
     position = metadata[["step_index", "step_fraction"]].to_numpy(dtype=np.float32)
-    rows.append(
-        _fit_control(
+    row, predictions = _fit_control(
             "position",
             position,
             metadata,
@@ -1120,7 +1156,8 @@ def evaluate_controls(
             seed,
             analysis_config,
         )
-    )
+    rows.append(row)
+    prediction_rows.append(predictions)
 
     vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=20_000)
     train_text = metadata.loc[train, "step_text"].astype(str)
@@ -1135,16 +1172,16 @@ def evaluate_controls(
         metadata.loc[validation], validation_scores, analysis_config
     )
     scores = classifier.predict_proba(x_test)[:, 1]
-    rows.append(
-        _control_row(
-            "current-step TF-IDF",
-            metadata.loc[test],
-            labels[test],
-            scores,
-            threshold,
-            analysis_config,
-        )
+    row, predictions = _control_outputs(
+        "current-step TF-IDF",
+        metadata.loc[test],
+        labels[test],
+        scores,
+        threshold,
+        analysis_config,
     )
+    rows.append(row)
+    prediction_rows.append(predictions)
 
     rng = np.random.default_rng(seed)
     shuffled = labels[train].copy()
@@ -1155,17 +1192,17 @@ def evaluate_controls(
         metadata.loc[validation], validation_scores, analysis_config
     )
     scores = classifier.predict_proba(scaler.transform(hidden[test]))[:, 1]
-    rows.append(
-        _control_row(
-            "shuffled-label hidden",
-            metadata.loc[test],
-            labels[test],
-            scores,
-            threshold,
-            analysis_config,
-        )
+    row, predictions = _control_outputs(
+        "shuffled-label hidden",
+        metadata.loc[test],
+        labels[test],
+        scores,
+        threshold,
+        analysis_config,
     )
-    return pd.DataFrame(rows)
+    rows.append(row)
+    prediction_rows.append(predictions)
+    return pd.DataFrame(rows), pd.concat(prediction_rows, ignore_index=True)
 
 
 def domain_transfer(
@@ -1272,7 +1309,20 @@ def _fit_control(
         metadata.loc[validation], validation_scores, analysis_config
     )
     scores = classifier.predict_proba(scaler.transform(features[test]))[:, 1]
-    return _control_row(name, metadata.loc[test], labels[test], scores, threshold, analysis_config)
+    return _control_outputs(
+        name, metadata.loc[test], labels[test], scores, threshold, analysis_config
+    )
+
+
+def _control_outputs(name, metadata, labels, scores, threshold, analysis_config):
+    row = _control_row(name, metadata, labels, scores, threshold, analysis_config)
+    columns = [column for column in PREDICTION_COLUMNS if column in metadata]
+    predictions = metadata[columns].copy()
+    predictions["control"] = name
+    predictions["label"] = np.asarray(labels, dtype=int)
+    predictions["score"] = np.asarray(scores, dtype=float)
+    predictions["threshold"] = float(threshold)
+    return row, predictions
 
 
 def _control_row(name, metadata, labels, scores, threshold, analysis_config=None):

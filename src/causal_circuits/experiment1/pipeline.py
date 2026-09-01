@@ -22,9 +22,15 @@ from causal_circuits.experiment1.data import (
 from causal_circuits.experiment1.interventions import (
     causal_effect_statistics,
     run_interventions,
+    score_intervention_baseline,
     summarize_interventions,
 )
-from causal_circuits.experiment1.model import HuggingFaceMathModel, TraceTooLongError
+from causal_circuits.experiment1.model import (
+    VERDICT_QUESTION,
+    VERDICT_READOUT_ID,
+    HuggingFaceMathModel,
+    TraceTooLongError,
+)
 from causal_circuits.experiment1.probes import ProbeResults, binary_metrics, fit_layer_probes
 
 
@@ -167,7 +173,9 @@ def fit_and_save_probes(config: ExperimentConfig) -> ProbeResults:
         results.predictions["layer"] == results.selected_layer
     ]
     selected_predictions.to_csv(output / "test_predictions.csv", index=False)
+    results.fit_predictions.to_csv(output / "fit_predictions.csv", index=False)
     results.controls.to_csv(output / "controls.csv", index=False)
+    results.control_predictions.to_csv(output / "control_predictions.csv", index=False)
     results.transfer.to_csv(output / "domain_transfer.csv", index=False)
     results.bootstrap.to_csv(output / "test_group_bootstrap.csv", index=False)
     results.bootstrap_summary.to_csv(output / "test_group_bootstrap_summary.csv", index=False)
@@ -214,8 +222,57 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
     )
     output = config.extraction.output_dir / "interventions"
     output.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = output / "individual.checkpoint.csv"
-    existing = pd.read_csv(checkpoint_path) if checkpoint_path.exists() else None
+    checkpoint_path = output / f"individual.{VERDICT_READOUT_ID}.checkpoint.csv"
+
+    baseline = score_intervention_baseline(
+        model,
+        traces,
+        metadata,
+        config=config.intervention,
+        target=config.probe.target,
+        seed=config.seed,
+    )
+    baseline_probabilities = (baseline["verdict_score"].to_numpy() + 1) / 2
+    baseline_metrics = binary_metrics(
+        baseline[config.probe.target].to_numpy(),
+        baseline_probabilities,
+        threshold=0.5,
+        calibration_bins=config.analysis.calibration_bins,
+    )
+    baseline_metrics.update(
+        {
+            "readout_id": VERDICT_READOUT_ID,
+            "question": VERDICT_QUESTION,
+            "positive_answer": config.intervention.incorrect_answer.strip(),
+            "negative_answer": config.intervention.correct_answer.strip(),
+            "score": "conditional_P(Yes)-conditional_P(No)",
+            "zero_threshold_accuracy": float(
+                (
+                    (baseline["verdict_score"].to_numpy() >= 0)
+                    == baseline[config.probe.target].to_numpy()
+                ).mean()
+            ),
+            "n_boundaries": len(baseline),
+            "specificity_gate_passed": bool(baseline_metrics["specificity"] > 0),
+        }
+    )
+    _atomic_write_text(output / "behavioral_verdict.json", json.dumps(baseline_metrics, indent=2))
+    if not baseline_metrics["specificity_gate_passed"]:
+        _atomic_write_text(
+            output / "progress.json",
+            json.dumps(
+                {
+                    "status": "stopped_after_baseline",
+                    "reason": "verdict readout specificity is zero",
+                    "readout_id": VERDICT_READOUT_ID,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+            ),
+        )
+        raise RuntimeError("Verdict readout specificity is zero; intervention was not run")
+
+    existing = pd.read_csv(checkpoint_path) if checkpoint_path.exists() else baseline
 
     def checkpoint(frame: pd.DataFrame) -> None:
         _atomic_save_csv(checkpoint_path, frame)
@@ -256,20 +313,6 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
         subgroup_min_traces=config.analysis.subgroup_min_traces,
         seed=config.seed,
     ).to_csv(output / "effect_statistics.csv", index=False)
-    baseline = results[(results["direction_type"] == "learned") & (results["alpha"] == 0.0)]
-    baseline_probabilities = 1 / (1 + np.exp(-baseline["verdict_score"].to_numpy()))
-    baseline_metrics = binary_metrics(
-        baseline[config.probe.target].to_numpy(),
-        baseline_probabilities,
-        threshold=0.5,
-        calibration_bins=config.analysis.calibration_bins,
-    )
-    baseline_metrics["zero_threshold_accuracy"] = float(
-        (
-            (baseline["verdict_score"].to_numpy() >= 0) == baseline[config.probe.target].to_numpy()
-        ).mean()
-    )
-    _atomic_write_text(output / "behavioral_verdict.json", json.dumps(baseline_metrics, indent=2))
     _atomic_write_text(
         output / "progress.json",
         json.dumps(

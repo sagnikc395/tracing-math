@@ -9,6 +9,16 @@ import numpy as np
 
 from causal_circuits.experiment1.data import SYSTEM_PROMPT, ProcessTrace, format_user_content
 
+VERDICT_READOUT_ID = "step-error-yes-no-v1"
+VERDICT_SYSTEM_PROMPT = (
+    "You are a mathematical reasoning verifier. Read the problem and numbered reasoning "
+    "steps, then answer the user's question with exactly Yes or No."
+)
+VERDICT_QUESTION = (
+    "Does the reasoning up to and including the final displayed step contain an error? "
+    "Answer Yes or No."
+)
+
 
 class TraceTooLongError(ValueError):
     """Raised when a complete trace does not fit the preregistered context limit."""
@@ -52,6 +62,7 @@ class HuggingFaceMathModel:
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
         if not self.tokenizer.is_fast:
             raise RuntimeError("A fast tokenizer is required to locate exact step boundaries")
+        self.tokenizer.padding_side = "right"
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         torch_dtype = getattr(torch, dtype)
@@ -78,6 +89,23 @@ class HuggingFaceMathModel:
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
+        ]
+        rendered = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        return rendered, markers
+
+    def _render_verdict(
+        self, trace: ProcessTrace, steps: Sequence[str]
+    ) -> tuple[str, list[str]]:
+        user_content, markers = format_user_content(
+            trace.problem, steps, include_question=False
+        )
+        messages = [
+            {"role": "system", "content": VERDICT_SYSTEM_PROMPT},
+            {"role": "user", "content": f"{user_content}\n\nQuestion: {VERDICT_QUESTION}"},
         ]
         rendered = self.tokenizer.apply_chat_template(
             messages,
@@ -192,7 +220,7 @@ class HuggingFaceMathModel:
         direction: np.ndarray | None = None,
         magnitude: float = 0.0,
     ) -> float:
-        """Return mean log P(INCORRECT) - mean log P(CORRECT), optionally intervened."""
+        """Return the conditional Yes-minus-No probability, optionally intervened."""
         return self.verdict_scores(
             [(trace, step_index)],
             correct_answer=correct_answer,
@@ -214,7 +242,7 @@ class HuggingFaceMathModel:
         magnitude: float = 0.0,
         batch_size: int = 1,
     ) -> list[float]:
-        """Score multiple trace boundaries, batching both candidate answers together."""
+        """Score boundaries with a single-token Yes/No next-token readout."""
         if batch_size < 1:
             raise ValueError("batch_size must be positive")
         scores: list[float] = []
@@ -225,7 +253,9 @@ class HuggingFaceMathModel:
             for trace, step_index in chunk:
                 if not 0 <= step_index < len(trace.steps):
                     raise IndexError(f"Step {step_index} is outside trace {trace.trace_id}")
-                rendered, markers = self._render(trace, trace.steps[: step_index + 1])
+                rendered, markers = self._render_verdict(
+                    trace, trace.steps[: step_index + 1]
+                )
                 boundary_encoding = self.tokenizer(
                     rendered,
                     add_special_tokens=False,
@@ -242,7 +272,7 @@ class HuggingFaceMathModel:
                 rendered_batch.append(rendered)
                 boundary_batch.append(boundaries[-1])
             scores.extend(
-                self._answer_log_probability_differences(
+                self._answer_probability_differences(
                     rendered_batch,
                     boundary_batch,
                     correct_answer=correct_answer,
@@ -254,7 +284,7 @@ class HuggingFaceMathModel:
             )
         return scores
 
-    def _answer_log_probability_differences(
+    def _answer_probability_differences(
         self,
         rendered_batch: Sequence[str],
         boundaries: Sequence[int],
@@ -265,28 +295,18 @@ class HuggingFaceMathModel:
         direction: np.ndarray | None,
         magnitude: float,
     ) -> list[float]:
-        texts = [
-            rendered + answer
-            for rendered in rendered_batch
-            for answer in (incorrect_answer, correct_answer)
-        ]
-        prompt_lengths = [len(rendered) for rendered in rendered_batch for _ in range(2)]
+        incorrect_token = self._single_token_id(incorrect_answer)
+        correct_token = self._single_token_id(correct_answer)
+        if incorrect_token == correct_token:
+            raise ValueError("Verdict answers must tokenize to different tokens")
         encoded = self.tokenizer(
-            texts,
+            list(rendered_batch),
             add_special_tokens=False,
             padding=True,
-            return_offsets_mapping=True,
             return_tensors="pt",
         )
         if int(encoded["attention_mask"].sum(dim=1).max()) > self.max_length:
             raise TraceTooLongError("Verdict prompt exceeds the configured context limit")
-        offsets_batch = encoded.pop("offset_mapping").tolist()
-        answer_positions = [
-            [index for index, (_, end) in enumerate(offsets) if end > prompt_length]
-            for offsets, prompt_length in zip(offsets_batch, prompt_lengths, strict=True)
-        ]
-        if any(not positions or positions[0] == 0 for positions in answer_positions):
-            raise RuntimeError("Could not identify tokens for a verdict answer")
         model_inputs = {key: value.to(self.device) for key, value in encoded.items()}
 
         handle = None
@@ -295,7 +315,7 @@ class HuggingFaceMathModel:
                 raise ValueError(f"Intervention layer must be in [0, {self.n_decoder_layers - 1}]")
             vector = self._torch.as_tensor(direction, device=self.device)
             injection_boundaries = self._torch.as_tensor(
-                [boundary for boundary in boundaries for _ in range(2)], device=self.device
+                boundaries, device=self.device
             )
 
             def inject(_module, args):
@@ -310,36 +330,29 @@ class HuggingFaceMathModel:
         try:
             with self._torch.inference_mode():
                 logits = self.model(**model_inputs, use_cache=False, return_dict=True).logits
-            token_ids = model_inputs["input_ids"]
-            selected_logits = self._torch.stack(
-                [
-                    logits[batch_index, position - 1, :]
-                    for batch_index, positions in enumerate(answer_positions)
-                    for position in positions
-                ]
-            )
-            selected_token_ids = self._torch.stack(
-                [
-                    token_ids[batch_index, position]
-                    for batch_index, positions in enumerate(answer_positions)
-                    for position in positions
-                ]
-            )
-            del logits
-            selected_log_probs = self._torch.log_softmax(selected_logits.float(), dim=-1)
-            token_log_probs = selected_log_probs.gather(
-                1, selected_token_ids[:, None]
-            ).squeeze(1)
-            answer_scores = []
-            offset = 0
-            for positions in answer_positions:
-                count = len(positions)
-                answer_scores.append(float(token_log_probs[offset : offset + count].mean().item()))
-                offset += count
-            return [
-                answer_scores[index] - answer_scores[index + 1]
-                for index in range(0, len(answer_scores), 2)
-            ]
+            token_positions = self._torch.arange(
+                logits.shape[1], device=self.device
+            ).expand_as(model_inputs["attention_mask"])
+            final_positions = token_positions.masked_fill(
+                model_inputs["attention_mask"] == 0, -1
+            ).max(dim=1).values
+            batch_indices = self._torch.arange(logits.shape[0], device=self.device)
+            candidate_logits = logits[
+                batch_indices,
+                final_positions,
+            ][:, [incorrect_token, correct_token]].float()
+            candidate_probabilities = self._torch.softmax(candidate_logits, dim=-1)
+            return (
+                candidate_probabilities[:, 0] - candidate_probabilities[:, 1]
+            ).cpu().tolist()
         finally:
             if handle is not None:
                 handle.remove()
+
+    def _single_token_id(self, answer: str) -> int:
+        token_ids = self.tokenizer(answer, add_special_tokens=False)["input_ids"]
+        if len(token_ids) != 1:
+            raise ValueError(
+                f"Verdict answer {answer!r} must encode as exactly one token; got {len(token_ids)}"
+            )
+        return int(token_ids[0])

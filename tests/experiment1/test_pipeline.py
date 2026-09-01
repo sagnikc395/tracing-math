@@ -4,7 +4,9 @@ from dataclasses import replace
 
 import numpy as np
 import pandas as pd
+import pytest
 
+from causal_circuits.experiment1 import pipeline
 from causal_circuits.experiment1.config import ExperimentConfig
 from causal_circuits.experiment1.pipeline import plot_artifacts
 
@@ -103,3 +105,38 @@ def test_plot_artifacts_creates_only_essential_paper_figures(tmp_path) -> None:
         "transfer_and_causal.pdf",
     }
     assert all(path.exists() for path in outputs)
+
+
+def test_interventions_stop_when_readout_specificity_is_zero(tmp_path, monkeypatch) -> None:
+    base_config = ExperimentConfig.from_yaml("configs/experiment.yaml")
+    config = replace(base_config, extraction=replace(base_config.extraction, output_dir=tmp_path))
+    probe_dir = tmp_path / "probes"
+    probe_dir.mkdir()
+    np.savez(
+        probe_dir / "directions.npz",
+        selected_intervention_layer=0,
+        directions=np.ones((1, 2)),
+        projection_stds=np.ones(1),
+    )
+    metadata = pd.DataFrame({"partition": ["test"]})
+    baseline = pd.DataFrame(
+        {
+            "invalid_so_far": [1, 0],
+            "verdict_score": [0.8, 0.8],
+        }
+    )
+    monkeypatch.setattr(pipeline, "load_traces", lambda _path: [])
+    monkeypatch.setattr(pipeline, "load_activation_shards", lambda _path: (np.empty(0), metadata))
+    monkeypatch.setattr(pipeline, "HuggingFaceMathModel", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(pipeline, "score_intervention_baseline", lambda *_args, **_kwargs: baseline)
+
+    called = False
+
+    def fail_if_called(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(pipeline, "run_interventions", fail_if_called)
+    with pytest.raises(RuntimeError, match="specificity is zero"):
+        pipeline.run_and_save_interventions(config)
+    assert not called

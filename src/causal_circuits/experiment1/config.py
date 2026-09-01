@@ -157,6 +157,13 @@ class ExperimentConfig:
             raise ValueError("intervention.random_directions cannot be negative")
         if self.intervention.batch_size < 1:
             raise ValueError("intervention.batch_size must be positive")
+        if self.intervention.correct_answer == self.intervention.incorrect_answer:
+            raise ValueError("intervention verdict answers must differ")
+        if (
+            self.intervention.correct_answer.strip().casefold(),
+            self.intervention.incorrect_answer.strip().casefold(),
+        ) != ("no", "yes"):
+            raise ValueError("the fixed verdict readout requires No and Yes answers")
         if not 0 <= self.analysis.threshold_min < self.analysis.threshold_max <= 1:
             raise ValueError("analysis threshold bounds must satisfy 0 <= min < max <= 1")
         if self.analysis.threshold_points < 2:
@@ -230,8 +237,8 @@ def _build_config(raw: dict[str, Any]) -> ExperimentConfig:
             alphas=tuple(map(float, intervention["alphas"])),
             examples_per_class=int(intervention["examples_per_class"]),
             random_directions=int(intervention["random_directions"]),
-            correct_answer=str(intervention.get("correct_answer", " CORRECT")),
-            incorrect_answer=str(intervention.get("incorrect_answer", " INCORRECT")),
+            correct_answer=str(intervention.get("correct_answer", " No")),
+            incorrect_answer=str(intervention.get("incorrect_answer", " Yes")),
             batch_size=int(intervention.get("batch_size", 1)),
         ),
         analysis=AnalysisConfig(
