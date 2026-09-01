@@ -187,13 +187,20 @@ The global `--config` option must precede the subcommand. The completed paper ru
 activation-extraction batch size of 16 on an A100; the notebook applies those runtime settings and
 records the resolved configuration with the artifacts.
 
-## Run the CPU follow-up
+## Run Experiment 2
 
-After the Experiment 1 compact artifacts and processed ProcessBench data are present, run:
+Experiment 2 is the CPU-only follow-up. It reads the frozen Experiment 1 outputs and does not load
+the language model or activation shards. Before running it, check that the paths configured in
+`configs/experiment2_cpu.yaml` point to the compact Experiment 1 artifact directory and the
+processed ProcessBench JSONL. The default paths are `artifacts/experiment1/qwen2.5-math-1.5b` and
+`data/processed/processbench.jsonl`.
 
 ```bash
-math-error-cpu-followup --config configs/experiment2_cpu.yaml
+uv run math-error-cpu-followup --config configs/experiment2_cpu.yaml
 ```
+
+The command runs the temporal, subgroup, sensitivity, and failure-case analyses and writes the
+results to `artifacts/experiment2_cpu` by default.
 
 ## Expected CPU follow-up outputs
 
