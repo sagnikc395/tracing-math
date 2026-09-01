@@ -1,4 +1,4 @@
-"""Causal probe-direction interventions and matched random controls."""
+"""Experiment 1 probe-direction interventions and matched random controls."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from causal_circuits.config import InterventionConfig
-from causal_circuits.data import ProcessTrace
-from causal_circuits.models import HuggingFaceMathModel
+from causal_circuits.experiment1.config import InterventionConfig
+from causal_circuits.experiment1.data import ProcessTrace
+from causal_circuits.experiment1.model import HuggingFaceMathModel
 
 
 def random_orthogonal_directions(direction: np.ndarray, count: int, *, seed: int) -> np.ndarray:

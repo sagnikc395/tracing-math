@@ -1,4 +1,4 @@
-"""Hugging Face adapter for activation extraction and causal interventions."""
+"""Experiment 1 Hugging Face adapter for extraction and interventions."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from causal_circuits.data import SYSTEM_PROMPT, ProcessTrace, format_user_content
+from causal_circuits.experiment1.data import SYSTEM_PROMPT, ProcessTrace, format_user_content
 
 
 class TraceTooLongError(ValueError):

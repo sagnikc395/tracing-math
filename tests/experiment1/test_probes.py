@@ -1,8 +1,11 @@
+"""Tests for Experiment 1 probe fitting and evaluation."""
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from causal_circuits.analysis import (
+from causal_circuits.experiment1.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
+from causal_circuits.experiment1.probes import (
     binary_metrics,
     calibration_curve_table,
     change_point_metrics,
@@ -10,7 +13,6 @@ from causal_circuits.analysis import (
     fit_layer_probes,
     group_bootstrap_metrics,
 )
-from causal_circuits.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
 
 
 def test_binary_metrics() -> None:
@@ -68,6 +70,14 @@ def test_change_point_metrics_recover_first_error_and_correct_trace() -> None:
     assert result["correct_accuracy"] == 1.0
     assert result["process_f1"] == 1.0
     assert choose_threshold(metadata, scores) == pytest.approx(0.5, abs=0.45)
+
+
+def test_change_point_metrics_uses_recorded_step_indices() -> None:
+    metadata = pd.DataFrame(
+        {"trace_id": ["bad", "bad"], "step_index": [4, 7], "first_error": [7, 7]}
+    )
+    result = change_point_metrics(metadata, np.array([0.1, 0.9]), threshold=0.5)
+    assert result["error_accuracy"] == 1.0
 
 
 def test_layer_probe_pipeline_smoke() -> None:

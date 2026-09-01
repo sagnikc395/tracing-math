@@ -2,7 +2,7 @@
 
 ## Project structure and module organization
 
-The installable Python package lives in `src/causal_circuits/`. Experiment 1 code is split across `data.py`, `models.py`, `analysis.py`, `circuits.py`, and `pipeline.py`. The post-hoc CPU analysis lives in `cpu_followup.py`. Keep command-line wiring in `cli.py` or `cpu_followup_cli.py`. Tests mirror these areas under `tests/` as `test_<module>.py`.
+The installable Python package lives in `src/causal_circuits/`. Experiment 1 code belongs under `experiment1/`: use `data.py` for ProcessBench I/O and prompts, `model.py` for the Hugging Face adapter, `probes.py` for predictive analysis, `interventions.py` for causal tests, and `pipeline.py` for orchestration and artifact I/O. The post-hoc CPU analysis belongs under `followup/`. Declare commands and options with Click in each area's `cli.py`; keep scientific work in the pipeline and analysis modules. Tests mirror these packages under `tests/experiment1/` and `tests/followup/`.
 
 Scientific settings belong in `configs/`. The CPU follow-up uses `experiment2_cpu.yaml` and reads frozen Experiment 1 outputs. Notebooks contain the A100/Google Drive workflow, `results/` holds written findings, and `paper/` contains the LaTeX manuscript and figures. Generated datasets, activation shards, and run outputs belong in `data/processed/` or `artifacts/`, not Git.
 
@@ -13,7 +13,7 @@ Use Python 3.10 or newer and `uv`:
 ```bash
 uv sync --extra dev
 uv run pytest
-uv run ruff check src tests main.py
+uv run ruff check src tests
 ```
 
 The first command creates the development environment; the others run the full test suite and lint maintained Python code. Validate configuration before costly model runs:

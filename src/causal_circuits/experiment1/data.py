@@ -1,4 +1,4 @@
-"""ProcessBench loading, validation, prompting, and leakage-safe partitions."""
+"""Experiment 1 ProcessBench loading, prompting, and leakage-safe partitions."""
 
 from __future__ import annotations
 

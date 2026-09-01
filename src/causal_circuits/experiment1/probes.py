@@ -1,4 +1,4 @@
-"""Leakage-resistant linear probes, controls, and change-point metrics."""
+"""Experiment 1 linear probes, controls, and change-point metrics."""
 
 from __future__ import annotations
 
@@ -14,7 +14,27 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from tqdm.auto import tqdm
 
-from causal_circuits.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
+from causal_circuits.experiment1.config import AnalysisConfig, ProbeConfig, ProbeFamilyConfig
+from causal_circuits.localization import (
+    localization_metrics,
+    localization_outcomes,
+    quantile_interval,
+)
+
+PREDICTION_COLUMNS = [
+    "trace_id",
+    "source",
+    "generator",
+    "step_index",
+    "step_fraction",
+    "first_error",
+    "has_error_trace",
+    "n_steps",
+    "token_count",
+    "final_answer_correct",
+    "invalid_so_far",
+    "error_onset",
+]
 
 
 @dataclass
@@ -114,64 +134,8 @@ def change_point_metrics(
     tolerances: tuple[int, ...] = (0, 1, 2),
 ) -> dict[str, float]:
     """ProcessBench exact first-error score induced by the first threshold crossing."""
-    expected_array, predicted_array = _change_point_outcomes(metadata, scores, threshold)
-    return _change_point_metrics_from_outcomes(expected_array, predicted_array, tolerances)
-
-
-def _change_point_outcomes(
-    metadata: pd.DataFrame, scores: np.ndarray, threshold: float
-) -> tuple[np.ndarray, np.ndarray]:
-    frame = metadata[["trace_id", "step_index", "first_error"]].copy()
-    frame["score"] = np.asarray(scores, dtype=float)
-    expected: list[int] = []
-    predicted: list[int] = []
-    for _, trace_rows in frame.groupby("trace_id", sort=False):
-        ordered = trace_rows.sort_values("step_index")
-        expected.append(int(ordered["first_error"].iloc[0]))
-        crossing = ordered["score"].to_numpy() >= threshold
-        first_crossing = int(ordered["step_index"].iloc[np.argmax(crossing)])
-        predicted.append(first_crossing if crossing.any() else -1)
-    return np.asarray(expected), np.asarray(predicted)
-
-
-def _change_point_metrics_from_outcomes(
-    expected_array: np.ndarray,
-    predicted_array: np.ndarray,
-    tolerances: tuple[int, ...],
-) -> dict[str, float]:
-    error_mask = expected_array >= 0
-    correct_mask = ~error_mask
-    error_accuracy = _safe_mean(predicted_array[error_mask] == expected_array[error_mask])
-    correct_accuracy = _safe_mean(predicted_array[correct_mask] == -1)
-    denominator = error_accuracy + correct_accuracy
-    process_f1 = 2 * error_accuracy * correct_accuracy / denominator if denominator > 0 else 0.0
-    exact_accuracy = _safe_mean(predicted_array == expected_array)
-    detected_error = error_mask & (predicted_array >= 0)
-    localization_error = predicted_array[detected_error] - expected_array[detected_error]
-    error_predictions = predicted_array[error_mask]
-    error_expected = expected_array[error_mask]
-    output = {
-        "error_accuracy": error_accuracy,
-        "correct_accuracy": correct_accuracy,
-        "process_f1": process_f1,
-        "first_error_exact": exact_accuracy,
-        "error_detection_rate": _safe_mean(error_predictions >= 0),
-        "error_miss_rate": _safe_mean(error_predictions < 0),
-        "correct_false_alarm_rate": _safe_mean(predicted_array[correct_mask] >= 0),
-        "early_detection_rate": _safe_mean(
-            (error_predictions >= 0) & (error_predictions < error_expected)
-        ),
-        "on_time_detection_rate": _safe_mean(error_predictions == error_expected),
-        "late_detection_rate": _safe_mean(error_predictions > error_expected),
-        "mean_signed_localization_error": _safe_mean(localization_error),
-        "mean_absolute_localization_error": _safe_mean(np.abs(localization_error)),
-    }
-    for tolerance in sorted(set(tolerances)):
-        within = (error_predictions >= 0) & (
-            np.abs(error_predictions - error_expected) <= tolerance
-        )
-        output[f"error_within_{tolerance}_accuracy"] = _safe_mean(within)
-    return output
+    expected, predicted = localization_outcomes(metadata, scores, threshold)
+    return localization_metrics(expected, predicted, tolerances)
 
 
 def choose_threshold(
@@ -241,10 +205,7 @@ def fit_layer_probes(
             (metadata["first_error"] >= 0) & (metadata["step_index"] == metadata["first_error"])
         ).astype(int)
     labels = metadata[config.target].to_numpy(dtype=int)
-    masks = {
-        split: metadata["partition"].eq(split).to_numpy()
-        for split in ("train", "validation", "test")
-    }
+    masks = _partition_masks(metadata)
     if any(labels[mask].min() == labels[mask].max() for mask in masks.values()):
         raise ValueError("Every data partition must contain both target classes")
 
@@ -256,14 +217,18 @@ def fit_layer_probes(
     metrics_rows: list[dict[str, object]] = []
     prediction_rows: list[pd.DataFrame] = []
     validation_prediction_rows: list[pd.DataFrame] = []
+    primary_family = next(
+        family for family in config.families if family.name == config.primary_family
+    )
 
     for layer in tqdm(range(n_layers), desc="primary probe layers"):
         x = np.asarray(activations[:, layer, :], dtype=np.float32)
-        best_c, validation_scores = _select_c(
+        best_c, _, validation_scores = _select_hyperparameters(
             x[masks["train"]],
             labels[masks["train"]],
             x[masks["validation"]],
             labels[masks["validation"]],
+            primary_family,
             config.c_values,
             config.max_iter,
             seed,
@@ -329,20 +294,7 @@ def fit_layer_probes(
         )
         layer_predictions = metadata.loc[
             masks["test"],
-            [
-                "trace_id",
-                "source",
-                "generator",
-                "step_index",
-                "step_fraction",
-                "first_error",
-                "has_error_trace",
-                "n_steps",
-                "token_count",
-                "final_answer_correct",
-                "invalid_so_far",
-                "error_onset",
-            ],
+            PREDICTION_COLUMNS,
         ].copy()
         layer_predictions["layer"] = layer
         layer_predictions["label"] = labels[masks["test"]]
@@ -579,10 +531,7 @@ def _fit_family_layers(
     seed: int,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     labels = metadata[target].to_numpy(dtype=int)
-    masks = {
-        split: metadata["partition"].eq(split).to_numpy()
-        for split in ("train", "validation", "test")
-    }
+    masks = _partition_masks(metadata)
     if any(len(np.unique(labels[mask])) < 2 for mask in masks.values()):
         return pd.DataFrame(), pd.DataFrame()
     metric_rows = []
@@ -591,7 +540,7 @@ def _fit_family_layers(
         desc=f"{family.name} / {target} layers",
     ):
         hidden = np.asarray(activations[:, layer, :], dtype=np.float32)
-        best_c, best_ratio, validation_scores = _select_family_hyperparameters(
+        best_c, best_ratio, validation_scores = _select_hyperparameters(
             hidden[masks["train"]],
             labels[masks["train"]],
             hidden[masks["validation"]],
@@ -701,20 +650,7 @@ def _fit_family_layers(
     )
     predictions = metadata.loc[
         masks["test"],
-        [
-            "trace_id",
-            "source",
-            "generator",
-            "step_index",
-            "step_fraction",
-            "first_error",
-            "has_error_trace",
-            "n_steps",
-            "token_count",
-            "final_answer_correct",
-            "invalid_so_far",
-            "error_onset",
-        ],
+        PREDICTION_COLUMNS,
     ].copy()
     predictions["layer"] = selected_layer
     predictions["label"] = labels[masks["test"]]
@@ -725,7 +661,7 @@ def _fit_family_layers(
     return metrics, predictions
 
 
-def _select_family_hyperparameters(
+def _select_hyperparameters(
     x_train,
     y_train,
     x_validation,
@@ -782,7 +718,7 @@ def group_bootstrap_metrics(
             metadata["trace_id"].to_numpy(), sort=False
         )
     ]
-    expected, predicted = _change_point_outcomes(metadata, scores, threshold)
+    expected, predicted = localization_outcomes(metadata, scores, threshold)
     n_traces = len(trace_indices)
     rng = np.random.default_rng(seed)
     rows = []
@@ -797,7 +733,7 @@ def group_bootstrap_metrics(
                 threshold=threshold,
                 calibration_bins=analysis_config.calibration_bins,
             ),
-            **_change_point_metrics_from_outcomes(
+            **localization_metrics(
                 expected[draws],
                 predicted[draws],
                 analysis_config.localization_tolerances,
@@ -815,12 +751,13 @@ def summarize_bootstrap(frame: pd.DataFrame, confidence_level: float) -> pd.Data
     for column in frame.columns.difference(["sample"]):
         values = frame[column].dropna().to_numpy(dtype=float)
         if values.size:
+            ci_low, ci_high = quantile_interval(values, tail)
             rows.append(
                 {
                     "metric": column,
                     "estimate": float(np.mean(values)),
-                    "ci_low": float(np.quantile(values, tail)),
-                    "ci_high": float(np.quantile(values, 1 - tail)),
+                    "ci_low": ci_low,
+                    "ci_high": ci_high,
                     "confidence_level": confidence_level,
                 }
             )
@@ -1010,8 +947,8 @@ def subgroup_metrics(
                 for metric in ("auroc", "process_f1", "first_error_exact"):
                     values = bootstrap.get(metric, pd.Series(dtype=float)).dropna()
                     if not values.empty:
-                        row[f"{metric}_ci_low"] = float(values.quantile(tail))
-                        row[f"{metric}_ci_high"] = float(values.quantile(1 - tail))
+                        bounds = quantile_interval(values.to_numpy(dtype=float), tail)
+                        row[f"{metric}_ci_low"], row[f"{metric}_ci_high"] = bounds
             rows.append(row)
     return pd.DataFrame(rows)
 
@@ -1081,6 +1018,11 @@ def compare_probe_families(
         tail = (1 - analysis_config.confidence_level) / 2
         for metric in primary_values:
             deltas = bootstraps.get(metric, pd.Series(dtype=float)).dropna()
+            bounds = (
+                quantile_interval(deltas.to_numpy(dtype=float), tail)
+                if not deltas.empty
+                else (np.nan, np.nan)
+            )
             rows.append(
                 {
                     "family": family,
@@ -1090,10 +1032,8 @@ def compare_probe_families(
                     "primary_value": primary_values[metric],
                     "family_value": candidate_values[metric],
                     "delta": candidate_values[metric] - primary_values[metric],
-                    "delta_ci_low": float(deltas.quantile(tail)) if not deltas.empty else np.nan,
-                    "delta_ci_high": (
-                        float(deltas.quantile(1 - tail)) if not deltas.empty else np.nan
-                    ),
+                    "delta_ci_low": bounds[0],
+                    "delta_ci_high": bounds[1],
                 }
             )
     return pd.DataFrame(rows)
@@ -1367,17 +1307,6 @@ def _choose_configured_threshold(
     )
 
 
-def _select_c(x_train, y_train, x_validation, y_validation, c_values, max_iter, seed):
-    candidates = []
-    for c_value in c_values:
-        scaler, classifier = _fit_logistic(x_train, y_train, c_value, max_iter, seed)
-        scores = classifier.predict_proba(scaler.transform(x_validation))[:, 1]
-        auroc = binary_metrics(y_validation, scores)["auroc"]
-        candidates.append((auroc, -abs(np.log10(c_value)), c_value, scores))
-    _, _, best_c, scores = max(candidates, key=lambda item: item[:2])
-    return float(best_c), scores
-
-
 def _fit_logistic(
     features,
     labels,
@@ -1471,3 +1400,10 @@ def _validate_inputs(activations: np.ndarray, metadata: pd.DataFrame, target: st
         raise ValueError(f"Missing metadata columns: {sorted(missing)}")
     if len(metadata) != len(activations):
         raise ValueError("Activation and metadata row counts differ")
+
+
+def _partition_masks(metadata: pd.DataFrame) -> dict[str, np.ndarray]:
+    return {
+        split: metadata["partition"].eq(split).to_numpy()
+        for split in ("train", "validation", "test")
+    }

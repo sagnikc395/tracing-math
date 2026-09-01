@@ -1,4 +1,4 @@
-"""Typed configuration for the mathematical error-tracing experiments."""
+"""Typed configuration for Experiment 1."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Resumable experiment stages and artifact I/O."""
+"""Experiment 1 orchestration, resumable stages, and artifact I/O."""
 
 from __future__ import annotations
 
@@ -11,21 +11,21 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from causal_circuits.analysis import ProbeResults, binary_metrics, fit_layer_probes
-from causal_circuits.circuits import (
-    causal_effect_statistics,
-    run_interventions,
-    summarize_interventions,
-)
-from causal_circuits.config import ExperimentConfig
-from causal_circuits.data import (
+from causal_circuits.experiment1.config import ExperimentConfig
+from causal_circuits.experiment1.data import (
     assign_partitions,
     iter_step_metadata,
     load_huggingface_traces,
     load_traces,
     save_traces,
 )
-from causal_circuits.models import HuggingFaceMathModel, TraceTooLongError
+from causal_circuits.experiment1.interventions import (
+    causal_effect_statistics,
+    run_interventions,
+    summarize_interventions,
+)
+from causal_circuits.experiment1.model import HuggingFaceMathModel, TraceTooLongError
+from causal_circuits.experiment1.probes import ProbeResults, binary_metrics, fit_layer_probes
 
 
 def download_data(config: ExperimentConfig, *, force: bool = False) -> Path:

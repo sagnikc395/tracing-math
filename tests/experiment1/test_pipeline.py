@@ -1,10 +1,12 @@
+"""Tests for Experiment 1 orchestration and artifact generation."""
+
 from dataclasses import replace
 
 import numpy as np
 import pandas as pd
 
-from causal_circuits.config import ExperimentConfig
-from causal_circuits.pipeline import plot_artifacts
+from causal_circuits.experiment1.config import ExperimentConfig
+from causal_circuits.experiment1.pipeline import plot_artifacts
 
 
 def test_plot_artifacts_creates_only_essential_paper_figures(tmp_path) -> None:

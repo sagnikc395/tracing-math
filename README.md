@@ -114,12 +114,18 @@ invalid.
 │   └── experiment2_cpu.yaml     # CPU follow-up resampling and output settings
 ├── data/processed/              # downloaded ProcessBench JSONL; ignored by Git
 ├── src/causal_circuits/
-│   ├── data.py                  # loading, normalization, and grouped splits
-│   ├── models.py                # Qwen loading, prompts, and hidden states
-│   ├── analysis.py              # probes, metrics, controls, and bootstrap analysis
-│   ├── circuits.py              # verdict scoring and Experiment 1 interventions
-│   ├── pipeline.py / cli.py     # Experiment 1 orchestration and CLI
-│   └── cpu_followup*.py         # post-hoc analysis and CLI
+│   ├── experiment1/
+│   │   ├── config.py            # typed scientific configuration
+│   │   ├── data.py              # ProcessBench loading, prompts, and grouped splits
+│   │   ├── model.py             # Qwen adapter and boundary-state extraction
+│   │   ├── probes.py            # probes, metrics, controls, and transfer tests
+│   │   ├── interventions.py     # causal interventions and random controls
+│   │   ├── pipeline.py          # resumable stages and artifact I/O
+│   │   └── cli.py               # Experiment 1 command-line interface
+│   └── followup/
+│       ├── config.py            # frozen post-hoc analysis settings
+│       ├── analysis.py          # temporal, subgroup, and sensitivity analyses
+│       └── cli.py               # CPU-only command-line interface
 ├── notebooks/
 │   ├── experiment.ipynb         # complete Experiment 1 A100/Drive workflow
 │   └── README.md                # notebook authentication, resume, and runtime notes
@@ -131,10 +137,21 @@ invalid.
 │   ├── figures/                 # PNG versions of the three Experiment 1 figures
 │   └── starter/                 # untouched NeurIPS template and style files
 ├── artifacts/                   # generated results and caches; ignored by Git
-├── tests/                       # 32 unit tests
+├── tests/                       # mirrors experiment1/ and followup/
 ├── experiment.md                # original hypotheses, protocol, and claim criteria
 └── pyproject.toml               # package metadata, dependencies, and console scripts
 ```
+
+### Code map
+
+Experiment 1 follows the data flow from `data.py` to `model.py`, then `probes.py` and
+`interventions.py`. `pipeline.py` is the orchestration boundary: it coordinates those modules and
+writes artifacts, while Click-based `cli.py` modules only declare commands and print results. The follow-up is separate
+because it consumes frozen Experiment 1 tables and never imports the model adapter.
+
+Tests use the same two top-level areas under `tests/experiment1/` and `tests/followup/`. Start with
+the corresponding test module when changing a scientific component. Public user workflows should
+go through the two console commands rather than importing CLI internals.
 
 Large activation shards, downloaded data, and runtime artifacts are intentionally excluded from
 Git. This workspace currently contains a compact Experiment 1 snapshot under
@@ -148,7 +165,7 @@ Python 3.10 or newer is required. With [uv](https://docs.astral.sh/uv/):
 ```bash
 uv sync --extra dev
 uv run pytest
-uv run ruff check src tests main.py
+uv run ruff check src tests
 ```
 
 The equivalent editable pip installation is:
@@ -156,7 +173,7 @@ The equivalent editable pip installation is:
 ```bash
 pip install -e '.[dev]'
 pytest
-ruff check src tests main.py
+ruff check src tests
 ```
 
 ## Run Experiment 1

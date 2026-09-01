@@ -10,51 +10,16 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import yaml
 from scipy.stats import norm
 from sklearn.metrics import roc_auc_score
 
-
-@dataclass(frozen=True)
-class CPUFollowupConfig:
-    """Paths and frozen resampling settings for the CPU follow-up."""
-
-    experiment1_dir: Path
-    data_path: Path
-    output_dir: Path
-    seed: int = 42
-    permutation_samples: int = 5_000
-    bootstrap_samples: int = 2_000
-    confidence_level: float = 0.95
-    subgroup_min_traces: int = 20
-    audit_examples_per_category: int = 12
-
-    @classmethod
-    def from_yaml(cls, path: str | Path) -> CPUFollowupConfig:
-        raw = yaml.safe_load(Path(path).read_text())
-        if not isinstance(raw, dict):
-            raise ValueError("CPU follow-up configuration must be a YAML mapping")
-        config = cls(
-            experiment1_dir=Path(raw["experiment1_dir"]),
-            data_path=Path(raw["data_path"]),
-            output_dir=Path(raw["output_dir"]),
-            seed=int(raw.get("seed", 42)),
-            permutation_samples=int(raw.get("permutation_samples", 5_000)),
-            bootstrap_samples=int(raw.get("bootstrap_samples", 2_000)),
-            confidence_level=float(raw.get("confidence_level", 0.95)),
-            subgroup_min_traces=int(raw.get("subgroup_min_traces", 20)),
-            audit_examples_per_category=int(raw.get("audit_examples_per_category", 12)),
-        )
-        config.validate()
-        return config
-
-    def validate(self) -> None:
-        if self.permutation_samples < 1 or self.bootstrap_samples < 1:
-            raise ValueError("resampling counts must be positive")
-        if not 0 < self.confidence_level < 1:
-            raise ValueError("confidence_level must be between zero and one")
-        if self.subgroup_min_traces < 1 or self.audit_examples_per_category < 1:
-            raise ValueError("trace and audit sample minima must be positive")
+from causal_circuits.followup.config import FollowupConfig
+from causal_circuits.localization import (
+    first_crossing,
+    localization_metrics,
+    outcome_label,
+    quantile_interval,
+)
 
 
 @dataclass(frozen=True)
@@ -69,7 +34,7 @@ class TraceSeries:
     scores: np.ndarray
 
 
-def run_cpu_followup(config: CPUFollowupConfig) -> dict[str, Any]:
+def run_followup(config: FollowupConfig) -> dict[str, Any]:
     """Run the complete follow-up without loading a language model or activation shard."""
     predictions = _load_predictions(config.experiment1_dir)
     threshold = _load_threshold(config.experiment1_dir, predictions)
@@ -163,7 +128,7 @@ def temporal_randomization_test(
     """Compare observed timing with within-trace circular shifts of the frozen scores."""
     expected = np.asarray([trace.first_error for trace in traces], dtype=int)
     observed_predicted = np.asarray(
-        [_first_crossing(trace.scores, threshold) for trace in traces], dtype=int
+        [first_crossing(trace.scores, threshold) for trace in traces], dtype=int
     )
     observed = _trace_metrics(expected, observed_predicted)
     rng = np.random.default_rng(seed)
@@ -172,7 +137,7 @@ def temporal_randomization_test(
         predicted = []
         for trace in traces:
             offset = int(rng.integers(0, len(trace.scores))) if len(trace.scores) > 1 else 0
-            predicted.append(_first_crossing(np.roll(trace.scores, offset), threshold))
+            predicted.append(first_crossing(np.roll(trace.scores, offset), threshold))
         rows.append({"sample": sample, **_trace_metrics(expected, np.asarray(predicted))})
     draws = pd.DataFrame(rows)
     tail = (1 - confidence_level) / 2
@@ -195,13 +160,14 @@ def temporal_randomization_test(
         else:
             center = float(np.mean(values))
             exceedances = int(np.sum(np.abs(values - center) >= abs(estimate - center)))
+        ci_low, ci_high = quantile_interval(values, tail)
         summary_rows.append(
             {
                 "metric": metric,
                 "observed": estimate,
                 "null_mean": float(np.mean(values)),
-                "null_ci_low": float(np.quantile(values, tail)),
-                "null_ci_high": float(np.quantile(values, 1 - tail)),
+                "null_ci_low": ci_low,
+                "null_ci_high": ci_high,
                 "p_value": (exceedances + 1) / (len(values) + 1),
                 "direction": direction,
                 "permutations": len(values),
@@ -235,13 +201,14 @@ def event_study(
         boot = np.asarray(
             [rng.choice(values, size=len(values), replace=True).mean() for _ in range(samples)]
         )
+        ci_low, ci_high = quantile_interval(boot, tail)
         rows.append(
             {
                 "relative_step": relative_step,
                 "mean_score": float(values.mean()),
                 "median_score": float(np.median(values)),
-                "ci_low": float(np.quantile(boot, tail)),
-                "ci_high": float(np.quantile(boot, 1 - tail)),
+                "ci_low": ci_low,
+                "ci_high": ci_high,
                 "n_traces": len(values),
             }
         )
@@ -290,13 +257,14 @@ def matched_placebo_analysis(
             samples=samples,
             rng=rng,
         )
+        ci_low, ci_high = quantile_interval(boot, tail)
         rows.append(
             {
                 "metric": metric,
                 "estimate": float(values.mean()),
                 "median": float(np.median(values)),
-                "ci_low": float(np.quantile(boot, tail)),
-                "ci_high": float(np.quantile(boot, 1 - tail)),
+                "ci_low": ci_low,
+                "ci_high": ci_high,
                 "n_traces": len(values),
                 "exact_source_generator_matches": int(
                     (frame["match_tier"] == "source_generator").sum()
@@ -361,13 +329,13 @@ def centered_discrimination(
                 tail,
                 len(trace_ids),
             ),
-            {
-                "metric": "mean_within_trace_auroc",
-                "estimate": float(np.mean(macro_values)),
-                "ci_low": float(np.quantile(macro_draws, tail)),
-                "ci_high": float(np.quantile(macro_draws, 1 - tail)),
-                "n_traces": len(macro_values),
-            },
+            _interval_row(
+                "mean_within_trace_auroc",
+                float(np.mean(macro_values)),
+                macro_draws,
+                tail,
+                len(macro_values),
+            ),
         ]
     )
 
@@ -426,12 +394,12 @@ def subgroup_outcomes(
             }
             for metric in ("complete_trace_accuracy", "error_exact", "correct_rejection"):
                 values = draw_frame[metric].dropna()
-                row[f"{metric}_ci_low"] = (
-                    float(values.quantile(tail)) if not values.empty else float("nan")
+                bounds = (
+                    quantile_interval(values.to_numpy(dtype=float), tail)
+                    if not values.empty
+                    else (float("nan"), float("nan"))
                 )
-                row[f"{metric}_ci_high"] = (
-                    float(values.quantile(1 - tail)) if not values.empty else float("nan")
-                )
+                row[f"{metric}_ci_low"], row[f"{metric}_ci_high"] = bounds
             rows.append(row)
     return pd.DataFrame(rows)
 
@@ -445,9 +413,7 @@ def causal_sensitivity_analysis(
     """Estimate paired mean effects and approximate minimum detectable effects."""
     path = experiment1_dir / "interventions" / "individual.csv"
     frame = pd.read_csv(path)
-    learned = frame[
-        frame["direction_type"].eq("learned") & frame["alpha"].ne(0)
-    ].copy()
+    learned = frame[frame["direction_type"].eq("learned") & frame["alpha"].ne(0)].copy()
     baseline_scale = float(
         frame[frame["direction_type"].eq("learned")]
         .drop_duplicates(["trace_id", "step_index"])["baseline_verdict_score"]
@@ -496,11 +462,7 @@ def write_failure_audit_sample(
         positions = rng.choice(len(group), size=count, replace=False)
         selected_ids.extend((category, trace_id) for trace_id in group.iloc[positions].trace_id)
     lookup = {trace_id: category for category, trace_id in selected_ids}
-    details = {
-        trace.trace_id: trace
-        for trace in traces
-        if trace.trace_id in lookup
-    }
+    details = {trace.trace_id: trace for trace in traces if trace.trace_id in lookup}
     records = []
     with data_path.open() as handle:
         for line in handle:
@@ -516,7 +478,7 @@ def write_failure_audit_sample(
                     "source": trace.source,
                     "generator": trace.generator,
                     "first_error": trace.first_error,
-                    "predicted_first_error": _first_crossing(trace.scores, threshold),
+                    "predicted_first_error": first_crossing(trace.scores, threshold),
                     "problem": row["problem"],
                     "steps": row["steps"],
                     "manual_error_type": "",
@@ -588,41 +550,18 @@ def _trace_series(predictions: pd.DataFrame) -> list[TraceSeries]:
     return traces
 
 
-def _first_crossing(scores: np.ndarray, threshold: float) -> int:
-    crossings = np.flatnonzero(scores >= threshold)
-    return int(crossings[0]) if crossings.size else -1
-
-
 def _trace_metrics(expected: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
-    erroneous = expected >= 0
-    correct = ~erroneous
-    detected = erroneous & (predicted >= 0)
-    error_exact = float(np.mean(predicted[erroneous] == expected[erroneous]))
-    correct_accuracy = float(np.mean(predicted[correct] == -1))
-    denominator = error_exact + correct_accuracy
-    signed = predicted[detected] - expected[detected]
+    metrics = localization_metrics(expected, predicted, (1, 2))
     return {
-        "first_error_exact": error_exact,
-        "correct_rejection": correct_accuracy,
-        "process_f1": 2 * error_exact * correct_accuracy / denominator if denominator else 0.0,
-        "complete_trace_accuracy": float(np.mean(predicted == expected)),
-        "error_detection_rate": float(np.mean(predicted[erroneous] >= 0)),
-        "error_within_1_accuracy": float(
-            np.mean(
-                (predicted[erroneous] >= 0)
-                & (np.abs(predicted[erroneous] - expected[erroneous]) <= 1)
-            )
-        ),
-        "error_within_2_accuracy": float(
-            np.mean(
-                (predicted[erroneous] >= 0)
-                & (np.abs(predicted[erroneous] - expected[erroneous]) <= 2)
-            )
-        ),
-        "mean_signed_localization_error": float(np.mean(signed)) if signed.size else float("nan"),
-        "mean_absolute_localization_error": (
-            float(np.mean(np.abs(signed))) if signed.size else float("nan")
-        ),
+        "first_error_exact": metrics["error_accuracy"],
+        "correct_rejection": metrics["correct_accuracy"],
+        "process_f1": metrics["process_f1"],
+        "complete_trace_accuracy": metrics["first_error_exact"],
+        "error_detection_rate": metrics["error_detection_rate"],
+        "error_within_1_accuracy": metrics["error_within_1_accuracy"],
+        "error_within_2_accuracy": metrics["error_within_2_accuracy"],
+        "mean_signed_localization_error": metrics["mean_signed_localization_error"],
+        "mean_absolute_localization_error": metrics["mean_absolute_localization_error"],
     }
 
 
@@ -665,12 +604,12 @@ def _interval_row(
     tail: float,
     n_traces: int,
 ) -> dict[str, float | int | str]:
-    array = np.asarray(values, dtype=float)
+    ci_low, ci_high = quantile_interval(np.asarray(values, dtype=float), tail)
     return {
         "metric": metric,
         "estimate": estimate,
-        "ci_low": float(np.quantile(array, tail)),
-        "ci_high": float(np.quantile(array, 1 - tail)),
+        "ci_low": ci_low,
+        "ci_high": ci_high,
         "n_traces": n_traces,
     }
 
@@ -711,17 +650,7 @@ def _matched_bootstrap_draws(
 def _trace_outcome_frame(traces: list[TraceSeries], threshold: float) -> pd.DataFrame:
     rows = []
     for trace in traces:
-        predicted = _first_crossing(trace.scores, threshold)
-        if trace.first_error < 0:
-            outcome = "correct_rejection" if predicted < 0 else "false_alarm"
-        elif predicted < 0:
-            outcome = "miss"
-        elif predicted < trace.first_error:
-            outcome = "early"
-        elif predicted == trace.first_error:
-            outcome = "on_time"
-        else:
-            outcome = "late"
+        predicted = first_crossing(trace.scores, threshold)
         rows.append(
             {
                 "trace_id": trace.trace_id,
@@ -732,7 +661,7 @@ def _trace_outcome_frame(traces: list[TraceSeries], threshold: float) -> pd.Data
                 "n_steps": trace.n_steps,
                 "token_count": trace.token_count,
                 "final_answer_correct": trace.final_answer_correct,
-                "outcome": outcome,
+                "outcome": outcome_label(trace.first_error, predicted),
             }
         )
     return pd.DataFrame(rows)
@@ -744,9 +673,7 @@ def _outcome_summary(frame: pd.DataFrame) -> dict[str, float]:
     complete = frame["predicted_first_error"].eq(frame["first_error"])
     return {
         "complete_trace_accuracy": float(complete.mean()),
-        "error_exact": (
-            float(complete[erroneous].mean()) if erroneous.any() else float("nan")
-        ),
+        "error_exact": (float(complete[erroneous].mean()) if erroneous.any() else float("nan")),
         "correct_rejection": (
             float(frame.loc[correct, "predicted_first_error"].lt(0).mean())
             if correct.any()
@@ -793,7 +720,7 @@ def _build_summary(
     centered: pd.DataFrame,
     sensitivity: pd.DataFrame,
     audit_path: Path,
-    config: CPUFollowupConfig,
+    config: FollowupConfig,
 ) -> dict[str, Any]:
     permutation_lookup = permutation.set_index("metric")
     placebo_lookup = placebo.set_index("metric")
@@ -809,68 +736,64 @@ def _build_summary(
         "test_rows": len(predictions),
         "test_traces": int(predictions["trace_id"].nunique()),
         "temporal_randomization": {
-            "observed_exact": float(permutation_lookup.loc["first_error_exact", "observed"]),
-            "null_exact_mean": float(
-                permutation_lookup.loc["first_error_exact", "null_mean"]
+            "observed_exact": _metric_value(permutation_lookup, "first_error_exact", "observed"),
+            "null_exact_mean": _metric_value(permutation_lookup, "first_error_exact", "null_mean"),
+            "exact_p_value": _metric_value(permutation_lookup, "first_error_exact", "p_value"),
+            "observed_within_1": _metric_value(
+                permutation_lookup, "error_within_1_accuracy", "observed"
             ),
-            "exact_p_value": float(permutation_lookup.loc["first_error_exact", "p_value"]),
-            "observed_within_1": float(
-                permutation_lookup.loc["error_within_1_accuracy", "observed"]
+            "null_within_1_mean": _metric_value(
+                permutation_lookup, "error_within_1_accuracy", "null_mean"
             ),
-            "null_within_1_mean": float(
-                permutation_lookup.loc["error_within_1_accuracy", "null_mean"]
-            ),
-            "within_1_p_value": float(
-                permutation_lookup.loc["error_within_1_accuracy", "p_value"]
+            "within_1_p_value": _metric_value(
+                permutation_lookup, "error_within_1_accuracy", "p_value"
             ),
         },
         "matched_placebo": {
-            "onset_jump": float(placebo_lookup.loc["real_jump", "estimate"]),
-            "placebo_jump": float(placebo_lookup.loc["placebo_jump", "estimate"]),
-            "difference": float(placebo_lookup.loc["paired_difference", "estimate"]),
-            "difference_ci_low": float(placebo_lookup.loc["paired_difference", "ci_low"]),
-            "difference_ci_high": float(placebo_lookup.loc["paired_difference", "ci_high"]),
+            "onset_jump": _metric_value(placebo_lookup, "real_jump"),
+            "placebo_jump": _metric_value(placebo_lookup, "placebo_jump"),
+            "difference": _metric_value(placebo_lookup, "paired_difference"),
+            "difference_ci_low": _metric_value(placebo_lookup, "paired_difference", "ci_low"),
+            "difference_ci_high": _metric_value(placebo_lookup, "paired_difference", "ci_high"),
         },
         "within_trace_discrimination": {
-            "raw_auroc": float(centered_lookup.loc["pooled_raw_auroc", "estimate"]),
-            "centered_auroc": float(
-                centered_lookup.loc["pooled_first_step_centered_auroc", "estimate"]
+            "raw_auroc": _metric_value(centered_lookup, "pooled_raw_auroc"),
+            "centered_auroc": _metric_value(centered_lookup, "pooled_first_step_centered_auroc"),
+            "centered_ci_low": _metric_value(
+                centered_lookup, "pooled_first_step_centered_auroc", "ci_low"
             ),
-            "centered_ci_low": float(
-                centered_lookup.loc["pooled_first_step_centered_auroc", "ci_low"]
+            "centered_ci_high": _metric_value(
+                centered_lookup, "pooled_first_step_centered_auroc", "ci_high"
             ),
-            "centered_ci_high": float(
-                centered_lookup.loc["pooled_first_step_centered_auroc", "ci_high"]
-            ),
-            "mean_within_trace_auroc": float(
-                centered_lookup.loc["mean_within_trace_auroc", "estimate"]
-            ),
+            "mean_within_trace_auroc": _metric_value(centered_lookup, "mean_within_trace_auroc"),
         },
         "causal_assay": {
             "baseline_auroc": float(verdict["auroc"]),
             "baseline_specificity": float(verdict["specificity"]),
-            "smallest_mde_80pct": float(
-                sensitivity["minimum_detectable_effect_80pct"].min()
-            ),
+            "smallest_mde_80pct": float(sensitivity["minimum_detectable_effect_80pct"].min()),
             "behaviorally_valid": bool(verdict["auroc"] > 0.5 and verdict["specificity"] > 0),
         },
         "decision": {
             "temporal_alignment_above_shift_null": bool(
-                permutation_lookup.loc["first_error_exact", "p_value"] < 0.05
-                and permutation_lookup.loc["first_error_exact", "observed"]
-                > permutation_lookup.loc["first_error_exact", "null_mean"]
+                _metric_value(permutation_lookup, "first_error_exact", "p_value") < 0.05
+                and _metric_value(permutation_lookup, "first_error_exact", "observed")
+                > _metric_value(permutation_lookup, "first_error_exact", "null_mean")
             ),
             "onset_jump_exceeds_placebo": bool(
-                placebo_lookup.loc["paired_difference", "ci_low"] > 0
+                _metric_value(placebo_lookup, "paired_difference", "ci_low") > 0
             ),
             "centered_discrimination_above_chance": bool(
-                centered_lookup.loc["pooled_first_step_centered_auroc", "ci_low"] > 0.5
+                _metric_value(centered_lookup, "pooled_first_step_centered_auroc", "ci_low") > 0.5
             ),
             "causal_assay_valid": bool(verdict["auroc"] > 0.5 and verdict["specificity"] > 0),
         },
         "failure_audit_sample": str(audit_path),
         "output_dir": str(config.output_dir),
     }
+
+
+def _metric_value(frame: pd.DataFrame, metric: str, column: str = "estimate") -> float:
+    return float(frame.loc[metric, column])
 
 
 def _results_markdown(
@@ -891,32 +814,32 @@ post-hoc and are reported as robustness analyses rather than preregistered confi
 
 ## Temporal alignment
 
-The original detector localized {temporal['observed_exact']:.1%} of first errors exactly. Circularly
+The original detector localized {temporal["observed_exact"]:.1%} of first errors exactly. Circularly
 shifting each score trajectory within its trace reduced the null mean to
-{temporal['null_exact_mean']:.1%} (permutation p = {temporal['exact_p_value']:.4g}). Within-one-step
-localization was {temporal['observed_within_1']:.1%}, compared with a shifted null mean of
-{temporal['null_within_1_mean']:.1%} (p = {temporal['within_1_p_value']:.4g}). The frozen score is
+{temporal["null_exact_mean"]:.1%} (permutation p = {temporal["exact_p_value"]:.4g}). Within-one-step
+localization was {temporal["observed_within_1"]:.1%}, compared with a shifted null mean of
+{temporal["null_within_1_mean"]:.1%} (p = {temporal["within_1_p_value"]:.4g}). The frozen score is
 temporally related to the annotation, although exact localization remains low in absolute terms.
 
 ## Onset change and trace-level offsets
 
-The mean score jump at the annotated onset was {matched['onset_jump']:.3f}. Metadata-matched
-transitions from correct traces changed by {matched['placebo_jump']:.3f}; the paired difference was
-{matched['difference']:.3f} with a {summary.get('confidence_level', 95)}% interval of
-[{matched['difference_ci_low']:.3f}, {matched['difference_ci_high']:.3f}].
+The mean score jump at the annotated onset was {matched["onset_jump"]:.3f}. Metadata-matched
+transitions from correct traces changed by {matched["placebo_jump"]:.3f}; the paired difference was
+{matched["difference"]:.3f} with a {summary.get("confidence_level", 95)}% interval of
+[{matched["difference_ci_low"]:.3f}, {matched["difference_ci_high"]:.3f}].
 
 Among erroneous traces whose first error occurred after step 0, pooled AUROC was
-{within['raw_auroc']:.3f}. Subtracting each trace's first-step score gave AUROC
-{within['centered_auroc']:.3f} [{within['centered_ci_low']:.3f},
-{within['centered_ci_high']:.3f}]. Mean AUROC calculated separately within each eligible trace was
-{within['mean_within_trace_auroc']:.3f}. Stable trace-level offsets do not explain all of the frozen
+{within["raw_auroc"]:.3f}. Subtracting each trace's first-step score gave AUROC
+{within["centered_auroc"]:.3f} [{within["centered_ci_low"]:.3f},
+{within["centered_ci_high"]:.3f}]. Mean AUROC calculated separately within each eligible trace was
+{within["mean_within_trace_auroc"]:.3f}. Stable trace-level offsets do not explain all of the frozen
 probe's discrimination.
 
 ## Causal assay
 
-The unmodified verdict score had AUROC {causal['baseline_auroc']:.3f} and specificity
-{causal['baseline_specificity']:.3f}. The smallest approximate effect detectable with 80% power
-across the tested doses was {causal['smallest_mde_80pct']:.5f} verdict-margin units. Statistical
+The unmodified verdict score had AUROC {causal["baseline_auroc"]:.3f} and specificity
+{causal["baseline_specificity"]:.3f}. The smallest approximate effect detectable with 80% power
+across the tested doses was {causal["smallest_mde_80pct"]:.5f} verdict-margin units. Statistical
 sensitivity does not repair a readout that fails to distinguish valid from invalid boundaries.
 
 ## Files

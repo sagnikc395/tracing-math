@@ -1,6 +1,8 @@
+"""Tests for Experiment 1 ProcessBench data handling."""
+
 import pytest
 
-from causal_circuits.data import (
+from causal_circuits.experiment1.data import (
     ProcessTrace,
     assign_partitions,
     format_user_content,

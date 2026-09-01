@@ -41,10 +41,10 @@ $[0.849,0.884]$), compared with $0.733$ for current-step TF--IDF and $0.730$ for
 The same score reaches AUROC $0.873$ when restricted to erroneous traces, and source-specific
 directions transfer across every pair of four mathematical domains (mean off-diagonal AUROC
 $0.805$).  Temporal localization is harder: the probe identifies the exact first error
-on $29.0\%$ of erroneous traces, lands within one step on $59.3\%$, and is systematically late by
+on $28.9\%$ of erroneous traces, lands within one step on $59.3\%$, and is systematically late by
 $0.59$ steps among detections.  Finally, adding or subtracting the probe direction at the boundary
-does not change the model's explicit correctness verdict.  Because that native verdict readout is
-itself degenerate (AUROC $0.283$), the intervention is inconclusive rather than evidence of causal
+produces no detected change in the model's explicit correctness verdict.  Because that native
+verdict readout is itself degenerate (AUROC $0.283$), the intervention is inconclusive rather than evidence of causal
 non-use.  The hidden states contain a transferable invalidity signal, but the experiment does not
 show precise timing or behavioral use.
 \end{abstract}
@@ -78,7 +78,7 @@ Our main findings are:
   exceeding position, current-step lexical, and shuffled-label controls.  Discrimination remains
   high within erroneous traces (AUROC $0.873$).
   \item The ranking signal transfers across all 12 off-diagonal source pairs, but exact localization
-  is weaker and less calibrated: only $29.0\%$ of erroneous traces are localized exactly.
+  is weaker and less calibrated: only $28.9\%$ of erroneous traces are localized exactly.
   \item The preregistered additive intervention yields no signed dose response.  However, the
   underlying explicit verdict score fails to distinguish valid from invalid boundaries, so this
   result cannot adjudicate whether the decoded signal is causally used.
@@ -218,9 +218,9 @@ $0.866$ (95\% CI $[0.849,0.884]$), average precision $0.843$ ($[0.813,0.870]$), 
 steps with AUROC $0.873$ and average precision $0.925$.
 
 The hidden-state score exceeds current-step TF--IDF (AUROC $0.733$, Process F1 $0.254$), position
-($0.730$, $0.054$), and the shuffled-label hidden-state control ($0.518$, $0.179$).  These controls
-rule out simple position and current-step lexical explanations, although the present artifacts lack
-paired confidence intervals for probe-minus-control differences.
+($0.730$, $0.054$), and the shuffled-label hidden-state control ($0.518$, $0.179$).  These gaps argue
+against simple position and current-step lexical explanations but do not exclude them; the present
+artifacts lack paired confidence intervals for probe-minus-control differences.
 
 \begin{figure}[t]
   \centering
@@ -232,7 +232,7 @@ paired confidence intervals for probe-minus-control differences.
   \label{fig:predictive}
 \end{figure}
 
-Exact timing is substantially weaker.  Across erroneous traces, $29.0\%$ are localized exactly,
+Exact timing is substantially weaker.  Across erroneous traces, $28.9\%$ are localized exactly,
 $59.3\%$ within one step, and $72.7\%$ within two.  The detector crosses somewhere on $88.7\%$ of
 erroneous traces but falsely crosses on $38.8\%$ of fully correct traces.  Complete-trace exact
 accuracy is $0.404$; Process F1 is $0.393$ (95\% CI $[0.351,0.436]$).  Among detected erroneous
@@ -270,26 +270,29 @@ This null cannot support causal non-use because the unmodified output assay is n
 All 256 baseline margins favor \texttt{INCORRECT}; recall is 1, specificity is 0, and AUROC is
 $0.283$.  Valid boundaries even have a larger mean incorrect-minus-correct margin (5.860) than
 invalid boundaries (5.625).  We can conclude only that this additive intervention, at index 23 and
-the marked boundary, did not affect this degenerate teacher-forced verdict score.
+the marked boundary, did not detectably affect this degenerate teacher-forced verdict score.
 
 \section{Discussion and limitations}
 
 The probe separates prefixes around human-annotated errors and transfers in ranking, but it often
-fires late and is not shown to drive a correctness judgment.  It may encode generator identity,
-trace-wide difficulty, final-answer outcome, or features richer than TF--IDF.  The persistent target
-may reward accumulated corruption, and the artificial marker may create a summary state.  We test
-one 1.5B model, dataset split, token location, layer, and additive direction.  The transfer cells and
-probe--control gaps also lack paired intervals.  A registered follow-up uses within-trace centered
-probes, a joint surface/metadata control, natural step-end states, a counterbalanced verdict, and a
-gradient positive control.  Decodability establishes accessible information; timing and causal use
-require separate tests with validated assays.
+fires late and is not shown to drive a correctness judgment.  A post-hoc analysis of the frozen
+test scores found $28.9\%$ exact localization versus $16.4\%$ after circular within-trace shifts
+($p=0.0002$).  The score rose by $0.257$ at the annotated onset; matched transitions in correct
+traces rose by $0.113$, a difference of $0.144$ (95\% CI $[0.096,0.193]$).  First-step centering
+left pooled within-error-trace AUROC at $0.881$.  These checks support a gradual temporal change,
+not a precise alarm, and remain post-hoc.
+
+The score may still encode generator identity, trace-wide difficulty, final-answer outcome, or
+features beyond TF--IDF.  The persistent target and artificial marker may reward accumulated
+corruption or create a summary state.  We test one model and split at one token location, layer, and
+intervention.  The compact release lacks retained train/validation and exclusion counts; transfer
+cells and probe--control gaps lack paired intervals.  Accessible information is not evidence of causal use.
 
 \paragraph{Responsible use.}
 
-This study introduces neither human-subject data nor a deployed verifier.  Internal error signals
-could support oversight, but false alarms, delayed detection, distribution shift, and adversarial
-traces make this probe unsuitable for grading or certifying high-stakes calculations.  We report
-controls and negative results and recommend human or formal verification for consequential uses.
+This study uses no human-subject data and deploys no verifier.  False alarms, delayed detection,
+distribution shift, and adversarial traces make the probe unsuitable for high-stakes grading or
+certification.  Consequential calculations still require human or formal verification.
 
 \bibliographystyle{plainnat}
 \bibliography{references}

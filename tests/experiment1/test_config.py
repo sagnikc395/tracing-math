@@ -1,8 +1,10 @@
+"""Tests for Experiment 1 configuration parsing."""
+
 from pathlib import Path
 
 import yaml
 
-from causal_circuits.config import ExperimentConfig
+from causal_circuits.experiment1.config import ExperimentConfig
 
 
 def test_default_config_is_valid() -> None:

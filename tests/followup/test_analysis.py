@@ -1,7 +1,9 @@
+"""Tests for the CPU-only follow-up analyses."""
+
 import numpy as np
 import pandas as pd
 
-from causal_circuits.cpu_followup import (
+from causal_circuits.followup.analysis import (
     TraceSeries,
     centered_discrimination,
     matched_placebo_analysis,

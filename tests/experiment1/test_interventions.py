@@ -1,16 +1,18 @@
+"""Tests for Experiment 1 activation interventions."""
+
 from dataclasses import replace
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from causal_circuits.circuits import (
+from causal_circuits.experiment1.config import ExperimentConfig
+from causal_circuits.experiment1.data import ProcessTrace
+from causal_circuits.experiment1.interventions import (
     causal_effect_statistics,
     random_orthogonal_directions,
     run_interventions,
 )
-from causal_circuits.config import ExperimentConfig
-from causal_circuits.data import ProcessTrace
 
 
 def test_random_controls_are_unit_and_orthogonal() -> None:
