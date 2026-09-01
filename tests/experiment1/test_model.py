@@ -54,3 +54,14 @@ def test_yes_no_readout_uses_final_non_padding_token() -> None:
 def test_yes_no_readout_rejects_multitoken_answers() -> None:
     with pytest.raises(ValueError, match="exactly one token"):
         _adapter()._single_token_id(" many")
+
+
+def test_content_token_location_ignores_whitespace_before_marker() -> None:
+    rendered = "Step text\n<<END_STEP_0>>"
+    offsets = [(0, 4), (5, 9), (9, 10), (10, 14), (14, len(rendered))]
+
+    index = HuggingFaceMathModel._content_token_index(
+        rendered, "<<END_STEP_0>>", offsets
+    )
+
+    assert index == 1

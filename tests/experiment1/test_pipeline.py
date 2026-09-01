@@ -1,10 +1,10 @@
 """Tests for Experiment 1 orchestration and artifact generation."""
 
+import json
 from dataclasses import replace
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from causal_circuits.experiment1 import pipeline
 from causal_circuits.experiment1.config import ExperimentConfig
@@ -121,8 +121,14 @@ def test_interventions_stop_when_readout_specificity_is_zero(tmp_path, monkeypat
     metadata = pd.DataFrame({"partition": ["test"]})
     baseline = pd.DataFrame(
         {
+            "trace_id": ["a", "b"],
+            "step_index": [0, 0],
             "invalid_so_far": [1, 0],
+            "direction_type": ["learned", "learned"],
+            "direction_index": [-1, -1],
+            "alpha": [0.0, 0.0],
             "verdict_score": [0.8, 0.8],
+            "delta_verdict_score": [0.0, 0.0],
         }
     )
     monkeypatch.setattr(pipeline, "load_traces", lambda _path: [])
@@ -137,6 +143,9 @@ def test_interventions_stop_when_readout_specificity_is_zero(tmp_path, monkeypat
         called = True
 
     monkeypatch.setattr(pipeline, "run_interventions", fail_if_called)
-    with pytest.raises(RuntimeError, match="specificity is zero"):
-        pipeline.run_and_save_interventions(config)
+    result = pipeline.run_and_save_interventions(config)
     assert not called
+    assert len(result) == 2
+    assert (tmp_path / "interventions" / "individual.csv").exists()
+    progress = json.loads((tmp_path / "interventions" / "progress.json").read_text())
+    assert progress["status"] == "stopped_after_baseline"

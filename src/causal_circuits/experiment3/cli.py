@@ -1,0 +1,75 @@
+"""Command-line interface for the exploratory workshop follow-ups."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import click
+
+from causal_circuits.experiment3.config import ExtendedFollowupConfig
+
+
+@click.group()
+@click.option(
+    "--config",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=Path("configs/experiment3_extended.yaml"),
+    show_default=True,
+)
+@click.pass_context
+def main(context: click.Context, config: Path) -> None:
+    """Run separate, explicitly post-hoc extensions to Experiment 1."""
+    context.obj = ExtendedFollowupConfig.from_yaml(config)
+
+
+@main.command("validate-config")
+@click.pass_obj
+def validate_config(config: ExtendedFollowupConfig) -> None:
+    click.echo(f"Valid extended follow-up for {config.model_name}")
+
+
+@main.command("fit-transition-probe")
+@click.pass_obj
+def fit_transition(config: ExtendedFollowupConfig) -> None:
+    from causal_circuits.experiment3.pipeline import fit_and_save_transition_probe
+
+    click.echo(json.dumps(fit_and_save_transition_probe(config), indent=2))
+
+
+@main.command("extract-boundary-controls")
+@click.pass_obj
+def extract_boundaries(config: ExtendedFollowupConfig) -> None:
+    from causal_circuits.experiment3.pipeline import extract_boundary_control_shards
+
+    click.echo(json.dumps(extract_boundary_control_shards(config), indent=2))
+
+
+@main.command("analyze-boundary-controls")
+@click.pass_obj
+def analyze_boundaries(config: ExtendedFollowupConfig) -> None:
+    from causal_circuits.experiment3.pipeline import analyze_boundary_controls
+
+    click.echo(json.dumps(analyze_boundary_controls(config), indent=2))
+
+
+@main.command("prepare-counterfactual-template")
+@click.option("--force", is_flag=True, help="Replace an existing unannotated template.")
+@click.pass_obj
+def prepare_counterfactuals(config: ExtendedFollowupConfig, force: bool) -> None:
+    from causal_circuits.experiment3.pipeline import prepare_counterfactual_template
+
+    click.echo(str(prepare_counterfactual_template(config, force=force)))
+
+
+@main.command("run-counterfactual-patching")
+@click.pass_obj
+def patch_counterfactuals(config: ExtendedFollowupConfig) -> None:
+    from causal_circuits.experiment3.pipeline import run_counterfactual_patching
+
+    click.echo(json.dumps(run_counterfactual_patching(config), indent=2))
+
+
+if __name__ == "__main__":
+    main()
+

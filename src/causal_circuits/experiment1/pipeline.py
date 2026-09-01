@@ -258,6 +258,11 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
     )
     _atomic_write_text(output / "behavioral_verdict.json", json.dumps(baseline_metrics, indent=2))
     if not baseline_metrics["specificity_gate_passed"]:
+        baseline.to_csv(output / "individual.csv", index=False)
+        summarize_interventions(baseline).to_csv(output / "summary.csv", index=False)
+        pd.DataFrame(
+            columns=["statistic", "scope", "value", "status", "estimate", "n_traces"]
+        ).to_csv(output / "effect_statistics.csv", index=False)
         _atomic_write_text(
             output / "progress.json",
             json.dumps(
@@ -270,7 +275,7 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
                 indent=2,
             ),
         )
-        raise RuntimeError("Verdict readout specificity is zero; intervention was not run")
+        return baseline
 
     existing = pd.read_csv(checkpoint_path) if checkpoint_path.exists() else baseline
 

@@ -11,8 +11,8 @@ workshop.
 
 ## Current status — September 1, 2026
 
-**The reported Experiment 1 and original CPU follow-up are complete. Three added analyses are
-implemented but await the required compute artifacts.**
+**The reported Experiment 1 and original CPU follow-up are complete. The workshop follow-up
+pipeline is implemented; its GPU stages and regenerated compact artifacts remain to be run.**
 
 The Experiment 1 analysis, compact result package, three paper figures, detailed result report, and
 compiled manuscript are complete. The follow-up reuses frozen Experiment 1 predictions and causal
@@ -28,6 +28,10 @@ It does not load the language model or extract new activations.
 | Original CPU-only follow-up run and interpretation | Complete |
 | Yes/No verdict baseline and gated intervention rerun | Implemented; GPU rerun pending |
 | Length-aware thresholds and paired probe-control intervals | Implemented; frozen fit/control predictions pending |
+| Matched first-error transition probe | Implemented; original activation shards required |
+| Natural-token versus marker-token control | Implemented; GPU extraction pending |
+| Verified counterfactual activation patching | Implemented; annotation and GPU run pending |
+| Same-family 7B replication | Added to Colab notebook; optional GPU run |
 
 The compiled PDF is [paper/neurips_2026.pdf](paper/neurips_2026.pdf). The full Experiment 1 report
 is [results/experiment1.md](results/experiment1.md), and the CPU follow-up report is
@@ -40,6 +44,12 @@ saves train+validation scores and per-example control scores. The CPU follow-up 
 fit trace-length-bin thresholds without test-label tuning and to bootstrap probe-minus-control
 differences by trace. The compact result package predates these files, so no new numerical claim has
 been added to the paper.
+
+The separate extended follow-up uses `configs/experiment3_extended.yaml` and the
+`math-error-extended-followup` command. It does not change the frozen Experiment 1 split, target,
+layer-selection rule, or intervention doses. Transition probing and boundary-location comparisons
+are marked post-hoc. Counterfactual patching accepts only rows explicitly marked `verified`; the
+template generator leaves corrected mathematical steps blank rather than manufacturing evidence.
 
 ## Experiment 1 results
 
@@ -121,7 +131,8 @@ invalid.
 .
 ├── configs/
 │   ├── experiment.yaml          # Experiment 1 scientific configuration
-│   └── experiment2_cpu.yaml     # CPU follow-up resampling and output settings
+│   ├── experiment2_cpu.yaml     # CPU follow-up resampling and output settings
+│   └── experiment3_extended.yaml  # extended post-hoc experiment settings
 ├── data/processed/              # downloaded ProcessBench JSONL; ignored by Git
 ├── src/causal_circuits/
 │   ├── experiment1/
@@ -132,16 +143,18 @@ invalid.
 │   │   ├── interventions.py     # causal interventions and random controls
 │   │   ├── pipeline.py          # resumable stages and artifact I/O
 │   │   └── cli.py               # Experiment 1 command-line interface
-│   └── followup/
-│       ├── config.py            # frozen post-hoc analysis settings
-│       ├── analysis.py          # temporal, subgroup, and sensitivity analyses
-│       └── cli.py               # CPU-only command-line interface
+│   ├── followup/
+│   │   ├── config.py            # frozen post-hoc analysis settings
+│   │   ├── analysis.py          # temporal, subgroup, and sensitivity analyses
+│   │   └── cli.py               # CPU-only command-line interface
+│   └── experiment3/             # transition, boundary, and patching stages
 ├── notebooks/
 │   ├── experiment.ipynb         # complete Experiment 1 A100/Drive workflow
 │   └── README.md                # notebook authentication, resume, and runtime notes
 ├── results/
 │   ├── experiment1.md           # Experiment 1 empirical report
-│   └── experiment2_cpu.md       # CPU follow-up methods and results
+│   ├── experiment2_cpu.md       # CPU follow-up methods and results
+│   └── experiment3_extended.md  # extended protocols and result gates
 ├── paper/
 │   ├── neurips_2026.tex / .pdf  # current manuscript and compiled output
 │   ├── figures/                 # PNG versions of the three Experiment 1 figures

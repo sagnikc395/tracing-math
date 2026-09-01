@@ -33,6 +33,7 @@ dev = [
 [project.scripts]
 math-error-tracing = "causal_circuits.experiment1.cli:main"
 math-error-cpu-followup = "causal_circuits.followup.cli:main"
+math-error-extended-followup = "causal_circuits.experiment3.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/causal_circuits"]
