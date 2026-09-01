@@ -31,22 +31,22 @@ Tracing the First Error in Hidden States}
 \maketitle
 
 \begin{abstract}
-Language models can produce fluent mathematical solutions whose first invalid step is difficult to
-locate from their text alone.  We test whether a math-specialized model internally registers this
-transition.  At every retained reasoning-step boundary from the 3,400-trace ProcessBench dataset,
-we extract the residual-stream state of \model{} and train layer-wise linear probes to predict whether the
-solution is invalid so far.  With problem-grouped splits and validation-only model selection, the
-selected probe obtains held-out AUROC $0.866$ (95\% whole-trace bootstrap CI
+Language models can produce fluent mathematical solutions even after the reasoning has failed.  We
+ask whether a math-specialized model's hidden states register the first invalid step.  At every
+retained step boundary in the 3,400-trace ProcessBench dataset, we record the residual-stream state
+of \model{} and train layer-wise linear probes to predict whether the solution is invalid so far.
+With problem-grouped splits and validation-only model selection, the selected probe obtains
+held-out AUROC $0.866$ (95\% whole-trace bootstrap CI
 $[0.849,0.884]$), compared with $0.733$ for current-step TF--IDF and $0.730$ for position.
 The same score reaches AUROC $0.873$ when restricted to erroneous traces, and source-specific
 directions transfer across every pair of four mathematical domains (mean off-diagonal AUROC
-$0.805$).  Temporal localization is materially harder: the probe identifies the exact first error
+$0.805$).  Temporal localization is harder: the probe identifies the exact first error
 on $29.0\%$ of erroneous traces, lands within one step on $59.3\%$, and is systematically late by
 $0.59$ steps among detections.  Finally, adding or subtracting the probe direction at the boundary
 does not change the model's explicit correctness verdict.  Because that native verdict readout is
 itself degenerate (AUROC $0.283$), the intervention is inconclusive rather than evidence of causal
-non-use.  These results isolate a transferable, linearly accessible invalidity signal while showing
-that decodability, precise error timing, and behavioral use are distinct claims.
+non-use.  The hidden states contain a transferable invalidity signal, but the experiment does not
+show precise timing or behavioral use.
 \end{abstract}
 
 \section{Introduction}
@@ -58,12 +58,12 @@ Verifiers therefore increasingly score intermediate steps rather than only final
 question: when a solution first becomes invalid, does the solving model's own representation change
 in a detectable way?
 
-This question matters for both interpretability and oversight.  If an internal error signal appears
-near the first invalid step, it could illuminate how models monitor extended computations and may
-support lightweight detection.  But three claims must be separated.  A state may contain
-decodable information without localizing the transition precisely; a direction may rank examples
-across domains without transferring its threshold; and a probe direction need not be used by the
-model's output computation \citep{hewitt2019control,elazar2021amnesic}.
+An internal signal near the first invalid step would provide evidence that the model tracks errors
+during an extended computation.  It might also support lightweight detection.  But three claims
+must be separated.  A state may contain decodable information without localizing the transition;
+a direction may rank examples across domains without transferring its threshold; and the model's
+output computation need not use a decodable direction
+\citep{hewitt2019control,elazar2021amnesic}.
 
 We study these distinctions in \model{} \citep{yang2024qwenmath} on \dataset{}, whose human
 annotations identify the first erroneous step in solutions drawn from GSM8K, MATH,
@@ -89,21 +89,21 @@ Our main findings are:
 \paragraph{Process-level mathematical verification.}
 Sampling solutions and ranking them with a verifier improved GSM8K performance before modern
 process supervision \citep{cobbe2021verifiers}.  PRM800K then enabled direct comparison of outcome
-and human step-level supervision, with process supervision performing better on a representative
-MATH subset \citep{lightman2023verify}.  Subsequent step-aware verifiers and process reward models
-made intermediate correctness a central signal for search and training
-\citep{li2023stepaware}.  However, process reward models can generalize poorly from GSM8K and MATH
-to harder competition problems.  ProcessBench addresses this by annotating the earliest error in
+and human step-level supervision; process supervision performed better on a representative MATH
+subset \citep{lightman2023verify}.  Later step-aware verifiers and process reward models used
+intermediate correctness for search and training \citep{li2023stepaware}.  These reward models can
+generalize poorly from GSM8K and MATH to harder competition problems.  ProcessBench addresses this
+problem by annotating the earliest error in
 3,400 traces spanning four sources and evaluating both reward and prompted critic models
 \citep{zheng2025processbench}.  Prompted LLM studies likewise find that identifying and correcting
 mathematical errors is a separate capability from solving, and that exact first-error localization
 remains difficult even when a reference solution is provided
 \citep{li2024erroridentification,srivatsa2025cannotspot}.
 
-Our use of ProcessBench differs from its standard benchmark setting: we repartition it to analyze
-one model's representations, so our metrics are not leaderboard scores.  The target also differs
-from generic step quality: it asks whether a prefix has crossed the human-annotated first-error
-boundary, making temporal localization a first-class outcome.
+We use ProcessBench differently from its standard benchmark setting.  We repartition it to analyze
+one model's representations, so our metrics are not leaderboard scores.  Rather than score generic
+step quality, we ask whether a prefix has crossed the human-annotated first-error boundary and when
+the probe first detects that change.
 
 \paragraph{Internal correctness and reasoning signals.}
 Models can sometimes estimate whether their own answers are correct
@@ -116,20 +116,19 @@ uses hidden states to prune low-quality reasoning traces during test-time scalin
 between computation and validation, with smaller models relying heavily on surface-level numerical
 consistency heads \citep{bertolazzi2025validationgap}.
 
-These studies establish that internal states can predict reasoning quality.  We complement them by
-using human first-error labels over open-ended model-generated solutions from grade-school through
-Olympiad mathematics, measuring the first score crossing rather than only step classification,
-testing all source-to-source transfers, and coupling the probe to a held-out causal intervention.
+These studies show that internal states can predict reasoning quality.  We use human first-error
+labels for open-ended model-generated solutions from grade-school through Olympiad mathematics.
+We measure the first score crossing rather than only step classification, test every
+source-to-source transfer, and evaluate the probe direction with a held-out causal intervention.
 
 \paragraph{From probing to causal evidence.}
 Probe accuracy alone is ambiguous because a classifier may exploit accessible but behaviorally
 unused information; controls and constrained probe families help but do not establish use
-\citep{hewitt2019control,belinkov2022probing}.  Causal work instead modifies representations, from
-amnesic removal \citep{elazar2021amnesic} and causal tracing \citep{meng2022rome} to activation
-addition and inference-time steering \citep{turner2023actadd,li2023iti}.  Following this logic, we
-treat intervention as a stronger, separate test.  Crucially, a null intervention is interpretable
-only when its output assay is sensitive and meaningful---a precondition our original verdict
-prompt fails.
+\citep{hewitt2019control,belinkov2022probing}.  Causal work instead modifies representations through
+amnesic removal \citep{elazar2021amnesic}, causal tracing \citep{meng2022rome}, activation addition,
+or inference-time steering \citep{turner2023actadd,li2023iti}.  We therefore treat intervention as
+a stronger, separate test.  A null intervention is interpretable only when its output assay is
+sensitive and meaningful.  Our original verdict prompt fails that condition.
 
 \section{Method}
 \label{sec:method}
@@ -168,8 +167,8 @@ after onset and should not be read as a label of the current step in isolation.
   \includegraphics[width=\linewidth]{method_and_trajectory.png}
   \caption{Method and one held-out score trajectory.  We probe boundary residual states at every
   layer, select all hyperparameters on validation data, and define the predicted first error as the
-  first threshold crossing.  In the example, the human error begins at step 1 but the score crosses
-  at step 2, illustrating why high step AUROC need not imply exact localization.}
+  first threshold crossing.  In the example, the human error begins at step 1 and the score crosses
+  at step 2.  High step AUROC therefore need not imply exact localization.}
   \label{fig:method}
 \end{figure}
 
@@ -227,7 +226,7 @@ paired confidence intervals for probe-minus-control differences.
   \centering
   \includegraphics[width=\linewidth]{predictive_results.png}
   \caption{Held-out decoding, localization, and controls.  Error bars at the selected index are
-  95\% whole-trace bootstrap intervals.  The hidden-state probe strongly ranks invalid prefixes,
+  95\% whole-trace bootstrap intervals.  The hidden-state probe ranks invalid prefixes well,
   but its first-error Process F1 is much lower than its step AUROC.  ``Within-error traces'' has no
   meaningful correct-trace rejection term, so its Process F1 is shown as zero.}
   \label{fig:predictive}
@@ -243,8 +242,8 @@ is systematically late rather than a sharp internal alarm at the annotated bound
 \subsection{Ranking transfers better than localization thresholds}
 
 Every off-diagonal transfer AUROC in Figure~\ref{fig:transfer} exceeds $0.739$.  Mean off-diagonal
-AUROC is $0.805$, compared with $0.845$ on the diagonal, supporting a partially shared ranking
-signal across mathematical sources.  Thresholded localization is less stable: mean off-diagonal
+AUROC is $0.805$, compared with $0.845$ on the diagonal.  The sources therefore share part of the
+ranking signal.  Thresholded localization is less stable: mean off-diagonal
 Process F1 is $0.261$ versus $0.336$ on the diagonal, with individual transfers ranging from
 $0.055$ to $0.371$.  Thus a source-trained direction often orders target-domain boundaries well
 without transferring calibrated probabilities or the optimal first-crossing threshold.
@@ -267,25 +266,23 @@ nonzero effect at any dose.  The mean changes at $\alpha=-4$ and $+4$ are $+0.00
 ($[-0.00108,0.00185]$) and $-0.00011$ ($[-0.00169,0.00138]$), respectively.  Neither extreme beats
 the distribution of 20 random orthogonal directions.
 
-This null cannot support causal non-use because the unmodified output assay fails its prerequisite.
+This null cannot support causal non-use because the unmodified output assay is not informative.
 All 256 baseline margins favor \texttt{INCORRECT}; recall is 1, specificity is 0, and AUROC is
 $0.283$.  Valid boundaries even have a larger mean incorrect-minus-correct margin (5.860) than
-invalid boundaries (5.625).  The narrow supported statement is therefore only that this additive
-intervention, at index 23 and the marked boundary, did not affect this particular degenerate
-teacher-forced verdict score.
+invalid boundaries (5.625).  We can conclude only that this additive intervention, at index 23 and
+the marked boundary, did not affect this degenerate teacher-forced verdict score.
 
 \section{Discussion and limitations}
 
-The probe separates prefixes around human-annotated errors and transfers in ranking, but often fires
-late and is not shown to drive a correctness judgment.  It may encode generator identity,
-trace-wide difficulty, final-answer outcome, or features richer than TF--IDF; the persistent target
-may reward accumulated corruption; and the artificial marker may create a summary state.  We test
-one 1.5B model, dataset split, token location, layer, and additive direction, while transfer cells
-and probe--control gaps lack paired intervals.  A registered follow-up uses within-trace centered
-probes, a joint surface/metadata control, natural step-end states, and a counterbalanced verdict
-with a gradient positive control.  The methodological conclusion is that decodability concerns
-accessible information, whereas timing and use require independently validated temporal and causal
-tests.
+The probe separates prefixes around human-annotated errors and transfers in ranking, but it often
+fires late and is not shown to drive a correctness judgment.  It may encode generator identity,
+trace-wide difficulty, final-answer outcome, or features richer than TF--IDF.  The persistent target
+may reward accumulated corruption, and the artificial marker may create a summary state.  We test
+one 1.5B model, dataset split, token location, layer, and additive direction.  The transfer cells and
+probe--control gaps also lack paired intervals.  A registered follow-up uses within-trace centered
+probes, a joint surface/metadata control, natural step-end states, a counterbalanced verdict, and a
+gradient positive control.  Decodability establishes accessible information; timing and causal use
+require separate tests with validated assays.
 
 \paragraph{Responsible use.}
 
