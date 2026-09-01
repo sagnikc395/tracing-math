@@ -1,0 +1,10 @@
+{
+  "dataset_sha256": "447f0a4b35c5747a9f9a3dab1e70d43f71efd501497b8cec668b71337099784a",
+  "model": "Qwen/Qwen2.5-Math-1.5B-Instruct",
+  "dtype": "bfloat16",
+  "max_length": 2048,
+  "locations": [
+    "step_content",
+    "marker"
+  ]
+}

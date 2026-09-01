@@ -1,0 +1,11 @@
+{
+  "status": "complete",
+  "analysis_scope": "post_hoc",
+  "fixed_layer": 23,
+  "fixed_c": 0.009999999776482582,
+  "locations": [
+    "step_content",
+    "marker"
+  ],
+  "updated_at": "2026-09-01T19:43:23.721971+00:00"
+}

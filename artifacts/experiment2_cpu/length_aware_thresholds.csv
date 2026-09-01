@@ -1,0 +1,5 @@
+length_bin,lower_n_steps,upper_n_steps,threshold,fit_traces,status
+Q1,-inf,5.0,0.565,907,fit
+Q2,5.0,7.0,0.58,744,fit
+Q3,7.0,9.0,0.6499999999999999,473,fit
+Q4,9.0,inf,0.6699999999999999,567,fit

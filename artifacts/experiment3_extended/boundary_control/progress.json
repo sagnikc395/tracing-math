@@ -1,0 +1,14 @@
+{
+  "status": "complete",
+  "last_shard": {
+    "start": 3300,
+    "end_exclusive": 3400
+  },
+  "traces_total": 3400,
+  "traces_completed": 3400,
+  "traces": 3400,
+  "extracted": 3360,
+  "skipped_long": 40,
+  "cached": 0,
+  "updated_at": "2026-09-01T19:33:26.817593+00:00"
+}
