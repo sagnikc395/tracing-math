@@ -1,7 +1,7 @@
 # Post-hoc CPU-only follow-up over frozen Experiment 1 outputs.
 # This configuration never loads the language model or activation shards.
 seed: 42
-experiment1_dir: artifacts/experiment1/qwen2.5-math-1.5b
+experiment1_dir: artifacts/qwen2.5-math-1.5b
 data_path: data/processed/processbench.jsonl
 output_dir: artifacts/experiment2_cpu
 permutation_samples: 5000

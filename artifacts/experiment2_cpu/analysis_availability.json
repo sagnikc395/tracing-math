@@ -1,4 +1,7 @@
 {
   "length_aware_thresholding": "complete",
+  "shortcut_controls": "complete",
+  "trace_weighting_sensitivity": "complete",
+  "data_flow": "complete",
   "probe_control_paired_intervals": "complete"
 }

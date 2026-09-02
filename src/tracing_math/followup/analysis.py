@@ -11,10 +11,17 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import yaml
 from scipy.stats import norm
+from sklearn.compose import ColumnTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from tracing_math.experiment1.probes import binary_metrics, choose_threshold
+from tracing_math.experiment1.data import ProcessTrace, assign_partitions, load_traces
+from tracing_math.experiment1.probes import binary_metrics, change_point_metrics, choose_threshold
 from tracing_math.followup.config import FollowupConfig
 from tracing_math.localization import (
     first_crossing,
@@ -44,6 +51,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     predictions = _load_predictions(config.experiment1_dir)
     threshold = _load_threshold(config.experiment1_dir, predictions)
     traces = _trace_series(predictions)
+    source_traces = load_traces(config.data_path)
     output = config.output_dir
     output.mkdir(parents=True, exist_ok=True)
 
@@ -97,8 +105,46 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         length_thresholds.to_csv(output / "length_aware_thresholds.csv", index=False)
         length_results.to_csv(output / "length_aware_threshold_results.csv", index=False)
         availability["length_aware_thresholding"] = "complete"
+
+        LOGGER.info("Running prefix-text and metadata-only shortcut controls")
+        shortcut_controls, shortcut_predictions = shortcut_control_analysis(
+            fit_predictions,
+            predictions,
+            source_traces,
+            seed=config.seed,
+        )
+        shortcut_controls.to_csv(output / "shortcut_controls.csv", index=False)
+        shortcut_predictions.to_csv(output / "shortcut_control_predictions.csv", index=False)
+        availability["shortcut_controls"] = "complete"
+
+        LOGGER.info("Running trace-equal-weight sensitivity (%d draws)", config.bootstrap_samples)
+        trace_weighting = trace_equal_weight_sensitivity(
+            predictions,
+            threshold=threshold,
+            samples=config.bootstrap_samples,
+            seed=config.seed,
+            confidence_level=config.confidence_level,
+        )
+        trace_weighting.to_csv(output / "trace_weighting_sensitivity.csv", index=False)
+        availability["trace_weighting_sensitivity"] = "complete"
+
+        train_fraction, validation_fraction = _frozen_split_fractions(config.experiment1_dir)
+        data_flow = data_flow_table(
+            fit_predictions,
+            predictions,
+            source_traces,
+            seed=config.seed,
+            train_fraction=train_fraction,
+            validation_fraction=validation_fraction,
+        )
+        data_flow.to_csv(output / "data_flow.csv", index=False)
+        availability["data_flow"] = "complete"
     else:
         length_results = pd.DataFrame()
+        shortcut_controls = pd.DataFrame()
+        shortcut_predictions = pd.DataFrame()
+        trace_weighting = pd.DataFrame()
+        data_flow = pd.DataFrame()
         availability["length_aware_thresholding"] = (
             "not run: probes/fit_predictions.csv is absent; test labels were not used for tuning"
         )
@@ -107,6 +153,10 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     if control_predictions_path.exists():
         LOGGER.info("Running paired probe-control intervals (%d draws)", config.bootstrap_samples)
         control_predictions = pd.read_csv(control_predictions_path)
+        if not shortcut_predictions.empty:
+            control_predictions = pd.concat(
+                [control_predictions, shortcut_predictions], ignore_index=True
+            )
         paired_controls = paired_probe_control_intervals(
             predictions,
             control_predictions,
@@ -162,6 +212,9 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         sensitivity=sensitivity,
         length_results=length_results,
         paired_controls=paired_controls,
+        shortcut_controls=shortcut_controls,
+        trace_weighting=trace_weighting,
+        data_flow=data_flow,
         availability=availability,
         audit_path=audit_path,
         config=config,
@@ -170,6 +223,303 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     (output / "results.md").write_text(_results_markdown(summary, placebo, centered, sensitivity))
     LOGGER.info("CPU follow-up complete: %s", output)
     return summary
+
+
+def shortcut_control_analysis(
+    fit_predictions: pd.DataFrame,
+    test_predictions: pd.DataFrame,
+    traces: list[ProcessTrace],
+    *,
+    seed: int,
+    max_iter: int = 2_000,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fit prefix-text and trace-metadata controls without using test labels for tuning."""
+    required = {
+        "trace_id",
+        "source",
+        "generator",
+        "partition",
+        "step_index",
+        "step_fraction",
+        "first_error",
+        "n_steps",
+        "token_count",
+        "final_answer_correct",
+        "label",
+    }
+    missing_fit = required.difference(fit_predictions.columns)
+    missing_test = (required - {"partition"}).difference(test_predictions.columns)
+    if missing_fit or missing_test:
+        raise ValueError(
+            "Missing shortcut-control columns: "
+            f"fit={sorted(missing_fit)}, test={sorted(missing_test)}"
+        )
+    if set(fit_predictions["partition"].astype(str)) != {"train", "validation"}:
+        raise ValueError("Shortcut controls require frozen train and validation predictions")
+
+    fit = _attach_prefix_text(fit_predictions, traces)
+    test = _attach_prefix_text(test_predictions.assign(partition="test"), traces)
+    train = fit["partition"].eq("train").to_numpy()
+    validation = fit["partition"].eq("validation").to_numpy()
+    labels = fit["label"].to_numpy(dtype=int)
+    test_labels = test["label"].to_numpy(dtype=int)
+    if any(np.unique(labels[mask]).size < 2 for mask in (train, validation)):
+        raise ValueError("Train and validation shortcut-control splits need both classes")
+
+    rows: list[dict[str, object]] = []
+    prediction_rows: list[pd.DataFrame] = []
+
+    vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=20_000)
+    x_train = vectorizer.fit_transform(fit.loc[train, "prefix_text"])
+    x_validation = vectorizer.transform(fit.loc[validation, "prefix_text"])
+    x_test = vectorizer.transform(test["prefix_text"])
+    lexical = LogisticRegression(
+        C=1.0,
+        class_weight="balanced",
+        max_iter=max_iter,
+        solver="liblinear",
+        random_state=seed,
+    ).fit(x_train, labels[train])
+    validation_scores = lexical.predict_proba(x_validation)[:, 1]
+    threshold = choose_threshold(fit.loc[validation], validation_scores)
+    scores = lexical.predict_proba(x_test)[:, 1]
+    row, control_predictions = _shortcut_control_outputs(
+        "prefix TF-IDF", test, test_labels, scores, threshold
+    )
+    rows.append(row)
+    prediction_rows.append(control_predictions)
+
+    numeric = ["step_index", "step_fraction", "n_steps", "token_count"]
+    categorical = ["source", "generator"]
+    for name, numeric_features in (
+        ("structural metadata", numeric),
+        ("metadata plus final outcome", [*numeric, "final_answer_correct"]),
+    ):
+        metadata_model = make_pipeline(
+            ColumnTransformer(
+                [
+                    ("numeric", StandardScaler(), numeric_features),
+                    ("categorical", OneHotEncoder(handle_unknown="ignore"), categorical),
+                ]
+            ),
+            LogisticRegression(
+                C=1.0,
+                class_weight="balanced",
+                max_iter=max_iter,
+                solver="liblinear",
+                random_state=seed,
+            ),
+        )
+        features = numeric_features + categorical
+        metadata_model.fit(fit.loc[train, features], labels[train])
+        validation_scores = metadata_model.predict_proba(fit.loc[validation, features])[:, 1]
+        threshold = choose_threshold(fit.loc[validation], validation_scores)
+        scores = metadata_model.predict_proba(test[features])[:, 1]
+        row, control_predictions = _shortcut_control_outputs(
+            name, test, test_labels, scores, threshold
+        )
+        rows.append(row)
+        prediction_rows.append(control_predictions)
+    return pd.DataFrame(rows), pd.concat(prediction_rows, ignore_index=True)
+
+
+def trace_equal_weight_sensitivity(
+    predictions: pd.DataFrame,
+    *,
+    threshold: float,
+    samples: int,
+    seed: int,
+    confidence_level: float,
+) -> pd.DataFrame:
+    """Compare boundary-weighted metrics with metrics giving every trace equal total weight."""
+    required = {"trace_id", "label", "score"}
+    missing = required.difference(predictions.columns)
+    if missing:
+        raise ValueError(f"Missing trace-weighting columns: {sorted(missing)}")
+    if samples < 1:
+        raise ValueError("bootstrap samples must be positive")
+
+    labels = predictions["label"].to_numpy(dtype=int)
+    scores = predictions["score"].to_numpy(dtype=float)
+    trace_codes, trace_ids = pd.factorize(predictions["trace_id"], sort=False)
+    row_counts = np.bincount(trace_codes).astype(float)
+    boundary_weights = np.ones(len(predictions), dtype=float)
+    equal_weights = 1.0 / row_counts[trace_codes]
+    boundary = _weighted_binary_metrics(labels, scores, threshold, boundary_weights)
+    equal = _weighted_binary_metrics(labels, scores, threshold, equal_weights)
+
+    metrics = ("auroc", "average_precision", "step_f1")
+    rng = np.random.default_rng(seed)
+    draws = {metric: [] for metric in metrics}
+    for _ in range(samples):
+        trace_weights = np.bincount(
+            rng.integers(0, len(trace_ids), size=len(trace_ids)), minlength=len(trace_ids)
+        ).astype(float)
+        draw_boundary = _weighted_binary_metrics(
+            labels, scores, threshold, trace_weights[trace_codes]
+        )
+        draw_equal = _weighted_binary_metrics(
+            labels,
+            scores,
+            threshold,
+            trace_weights[trace_codes] / row_counts[trace_codes],
+        )
+        for metric in metrics:
+            difference = draw_equal[metric] - draw_boundary[metric]
+            if np.isfinite(difference):
+                draws[metric].append(difference)
+
+    tail = (1 - confidence_level) / 2
+    rows = []
+    for metric in metrics:
+        ci_low, ci_high = quantile_interval(np.asarray(draws[metric]), tail)
+        rows.append(
+            {
+                "metric": metric,
+                "boundary_weighted": boundary[metric],
+                "trace_equal_weighted": equal[metric],
+                "difference": equal[metric] - boundary[metric],
+                "difference_ci_low": ci_low,
+                "difference_ci_high": ci_high,
+                "n_traces": len(trace_ids),
+                "bootstrap_samples": samples,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def data_flow_table(
+    fit_predictions: pd.DataFrame,
+    test_predictions: pd.DataFrame,
+    traces: list[ProcessTrace],
+    *,
+    seed: int,
+    train_fraction: float,
+    validation_fraction: float,
+) -> pd.DataFrame:
+    """Count attempted, retained, and excluded traces and boundaries by frozen partition."""
+    assignments = assign_partitions(
+        traces,
+        seed=seed,
+        train_fraction=train_fraction,
+        validation_fraction=validation_fraction,
+    )
+    attempted = pd.DataFrame(
+        [
+            {
+                "trace_id": trace.trace_id,
+                "source": trace.source,
+                "partition": assignments[trace.trace_id],
+                "has_error": int(trace.has_error),
+                "n_steps": len(trace.steps),
+            }
+            for trace in traces
+        ]
+    )
+    retained_rows = pd.concat(
+        [fit_predictions, test_predictions.assign(partition="test")], ignore_index=True
+    )
+    retained = (
+        retained_rows.groupby(["trace_id", "partition", "source"], as_index=False)
+        .agg(retained_boundaries=("step_index", "size"))
+    )
+    attempted = attempted.merge(
+        retained[["trace_id", "retained_boundaries"]],
+        on="trace_id",
+        how="left",
+        validate="one_to_one",
+    )
+    attempted["retained_boundaries"] = attempted["retained_boundaries"].fillna(0).astype(int)
+    attempted["retained"] = attempted["retained_boundaries"].gt(0)
+
+    rows = []
+    for partition in ("train", "validation", "test"):
+        frame = attempted[attempted["partition"].eq(partition)]
+        rows.append(_data_flow_row(partition, "all", frame))
+        for source, group in frame.groupby("source", sort=True):
+            rows.append(_data_flow_row(partition, str(source), group))
+    rows.append(_data_flow_row("all", "all", attempted))
+    return pd.DataFrame(rows)
+
+
+def _attach_prefix_text(
+    predictions: pd.DataFrame, traces: list[ProcessTrace]
+) -> pd.DataFrame:
+    prefix_text: dict[tuple[str, int], str] = {}
+    for trace in traces:
+        blocks = [f"Problem:\n{trace.problem.strip()}\n\nReasoning:"]
+        for step_index, step in enumerate(trace.steps):
+            blocks.append(f"[Step {step_index}]\n{step.strip()}")
+            prefix_text[(trace.trace_id, step_index)] = "\n\n".join(blocks)
+    keys = list(
+        zip(
+            predictions["trace_id"].astype(str),
+            predictions["step_index"].astype(int),
+            strict=True,
+        )
+    )
+    missing = [key for key in keys if key not in prefix_text]
+    if missing:
+        raise ValueError(f"Missing source text for prediction row {missing[0]}")
+    frame = predictions.copy()
+    frame["prefix_text"] = [prefix_text[key] for key in keys]
+    return frame
+
+
+def _shortcut_control_outputs(
+    name: str,
+    metadata: pd.DataFrame,
+    labels: np.ndarray,
+    scores: np.ndarray,
+    threshold: float,
+) -> tuple[dict[str, object], pd.DataFrame]:
+    row = {
+        "control": name,
+        **binary_metrics(labels, scores, threshold=threshold),
+        **change_point_metrics(metadata, scores, threshold),
+        "threshold": threshold,
+    }
+    columns = [
+        "trace_id",
+        "source",
+        "generator",
+        "step_index",
+        "step_fraction",
+        "first_error",
+        "n_steps",
+        "token_count",
+        "final_answer_correct",
+    ]
+    predictions = metadata[columns].copy()
+    predictions["control"] = name
+    predictions["label"] = labels
+    predictions["score"] = scores
+    predictions["threshold"] = threshold
+    return row, predictions
+
+
+def _data_flow_row(partition: str, source: str, frame: pd.DataFrame) -> dict[str, object]:
+    retained = frame["retained"]
+    return {
+        "partition": partition,
+        "source": source,
+        "attempted_traces": len(frame),
+        "retained_traces": int(retained.sum()),
+        "excluded_over_length": int((~retained).sum()),
+        "attempted_boundaries": int(frame["n_steps"].sum()),
+        "retained_boundaries": int(frame["retained_boundaries"].sum()),
+        "retained_erroneous_traces": int((retained & frame["has_error"].eq(1)).sum()),
+        "retained_correct_traces": int((retained & frame["has_error"].eq(0)).sum()),
+    }
+
+
+def _frozen_split_fractions(experiment1_dir: Path) -> tuple[float, float]:
+    path = experiment1_dir / "experiment_config.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"Missing frozen Experiment 1 configuration: {path}")
+    raw = yaml.safe_load(path.read_text())
+    probe = raw.get("probe", {}) if isinstance(raw, dict) else {}
+    return float(probe["train_fraction"]), float(probe["validation_fraction"])
 
 
 def length_aware_threshold_analysis(
@@ -1259,6 +1609,9 @@ def _build_summary(
     sensitivity: pd.DataFrame,
     length_results: pd.DataFrame,
     paired_controls: pd.DataFrame,
+    shortcut_controls: pd.DataFrame,
+    trace_weighting: pd.DataFrame,
+    data_flow: pd.DataFrame,
     availability: dict[str, str],
     audit_path: Path,
     config: FollowupConfig,
@@ -1347,6 +1700,12 @@ def _build_summary(
         }
     if not paired_controls.empty:
         summary["probe_control_paired_intervals"] = paired_controls.to_dict(orient="records")
+    if not shortcut_controls.empty:
+        summary["shortcut_controls"] = shortcut_controls.to_dict(orient="records")
+    if not trace_weighting.empty:
+        summary["trace_weighting_sensitivity"] = trace_weighting.to_dict(orient="records")
+    if not data_flow.empty:
+        summary["data_flow"] = data_flow.to_dict(orient="records")
     return summary
 
 
@@ -1365,6 +1724,32 @@ def _results_markdown(
     within = summary["within_trace_discrimination"]
     causal = summary["causal_assay"]
     availability = summary["analysis_availability"]
+    shortcut_rows = summary.get("shortcut_controls", [])
+    shortcut_lines = "\n".join(
+        f'- {row["control"]}: AUROC {row["auroc"]:.3f}, Process F1 '
+        f'{row["process_f1"]:.3f}'
+        for row in shortcut_rows
+    )
+    shortcut_section = (
+        "## Prefix and metadata shortcut controls\n\n"
+        f"{shortcut_lines}\n"
+        if shortcut_lines
+        else "## Prefix and metadata shortcut controls\n\nNot available.\n"
+    )
+    trace_rows = {
+        row["metric"]: row for row in summary.get("trace_weighting_sensitivity", [])
+    }
+    if "auroc" in trace_rows:
+        trace_row = trace_rows["auroc"]
+        trace_section = f"""## Trace-equal weighting
+
+Boundary-weighted AUROC was {trace_row["boundary_weighted"]:.3f}; assigning every trace equal
+total weight gave {trace_row["trace_equal_weighted"]:.3f} (difference
+{trace_row["difference"]:+.3f}, 95% interval [{trace_row["difference_ci_low"]:+.3f},
+{trace_row["difference_ci_high"]:+.3f}]).
+"""
+    else:
+        trace_section = "## Trace-equal weighting\n\nNot available.\n"
     if "length_aware_thresholding" in summary:
         length = summary["length_aware_thresholding"]
         length_section = f"""## Length-aware thresholding
@@ -1409,7 +1794,8 @@ temporally related to the annotation, although exact localization remains low in
 
 The mean score jump at the annotated onset was {matched["onset_jump"]:.3f}. Metadata-matched
 transitions from correct traces changed by {matched["placebo_jump"]:.3f}; the paired difference was
-{matched["difference"]:.3f} with a {summary.get("confidence_level", 95)}% interval of
+{matched["difference"]:.3f} with a
+{100 * summary.get("confidence_level", 0.95):.0f}% interval of
 [{matched["difference_ci_low"]:.3f}, {matched["difference_ci_high"]:.3f}].
 
 Among erroneous traces whose first error occurred after step 0, pooled AUROC was
@@ -1429,6 +1815,10 @@ sensitivity does not repair a readout that fails to distinguish valid from inval
 {length_section}
 
 {paired_section}
+
+{shortcut_section}
+
+{trace_section}
 
 ## Files
 

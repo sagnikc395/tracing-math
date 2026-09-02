@@ -272,6 +272,9 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
         threshold=0.5,
         calibration_bins=config.analysis.calibration_bins,
     )
+    behaviorally_valid = bool(
+        baseline_metrics["auroc"] > 0.5 and baseline_metrics["specificity"] > 0
+    )
     baseline_metrics.update(
         {
             "readout_id": VERDICT_READOUT_ID,
@@ -287,10 +290,11 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
             ),
             "n_boundaries": len(baseline),
             "specificity_gate_passed": bool(baseline_metrics["specificity"] > 0),
+            "behavioral_validity_gate_passed": behaviorally_valid,
         }
     )
     _atomic_write_text(output / "behavioral_verdict.json", json.dumps(baseline_metrics, indent=2))
-    if not baseline_metrics["specificity_gate_passed"]:
+    if not behaviorally_valid:
         baseline.to_csv(output / "individual.csv", index=False)
         summarize_interventions(baseline).to_csv(output / "summary.csv", index=False)
         pd.DataFrame(
@@ -301,7 +305,7 @@ def run_and_save_interventions(config: ExperimentConfig) -> pd.DataFrame:
             json.dumps(
                 {
                     "status": "stopped_after_baseline",
-                    "reason": "verdict readout specificity is zero",
+                    "reason": "verdict readout failed AUROC or specificity gate",
                     "readout_id": VERDICT_READOUT_ID,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
@@ -407,7 +411,7 @@ def plot_artifacts(config: ExperimentConfig) -> list[Path]:
         (0.35, 0.58, "Boundary residual\nstates at every layer"),
         (0.68, 0.58, "L2 invalidity\nprobe"),
         (0.35, 0.12, "Held-out\nlocalization"),
-        (0.68, 0.12, "Causal direction\nintervention"),
+        (0.68, 0.12, "Post-hoc causal pilot\n(assay-gated)"),
     ]
     for x, y, label in stages:
         method_axis.text(
@@ -433,7 +437,7 @@ def plot_artifacts(config: ExperimentConfig) -> list[Path]:
             xycoords="axes fraction",
             arrowprops={"arrowstyle": "->", "color": "0.3", "linewidth": 1.2},
         )
-    method_axis.set_title("Mechanistic experiment", fontsize=10)
+    method_axis.set_title("Hidden-state probe audit", fontsize=10)
 
     selected_predictions = predictions[predictions["layer"] == selected_layer].copy()
     erroneous = selected_predictions[selected_predictions["first_error"] >= 0]
@@ -493,20 +497,25 @@ def plot_artifacts(config: ExperimentConfig) -> list[Path]:
         (metrics["split"] == "test_error_traces") & (metrics["layer"] == selected_layer)
     ].iloc[0]
     table_rows = [
-        ["Selected hidden state", selected_row["auroc"], selected_row["process_f1"]],
-        ["Embedding state", embedding_row["auroc"], embedding_row["process_f1"]],
-        ["Within-error traces", within_error_row["auroc"], within_error_row["process_f1"]],
+        [
+            "Selected hidden state",
+            f"{selected_row['auroc']:.3f}",
+            f"{selected_row['process_f1']:.3f}",
+        ],
+        [
+            "Embedding-index probe",
+            f"{embedding_row['auroc']:.3f}",
+            f"{embedding_row['process_f1']:.3f}",
+        ],
+        ["Within-error traces", f"{within_error_row['auroc']:.3f}", "N/A"],
     ]
     table_rows.extend(
-        [row["control"], row["auroc"], row["process_f1"]] for _, row in controls.iterrows()
+        [row["control"], f"{row['auroc']:.3f}", f"{row['process_f1']:.3f}"]
+        for _, row in controls.iterrows()
     )
     table_axis.axis("off")
-    table_values = [
-        [name, f"{auroc:.3f}", f"{process_f1:.3f}"]
-        for name, auroc, process_f1 in table_rows
-    ]
     table = table_axis.table(
-        cellText=table_values,
+        cellText=table_rows,
         colLabels=["Held-out comparison", "AUROC", "First-error F1"],
         colWidths=[0.58, 0.2, 0.25],
         cellLoc="center",

@@ -17,7 +17,8 @@ temporally related to the annotation, although exact localization remains low in
 
 The mean score jump at the annotated onset was 0.257. Metadata-matched
 transitions from correct traces changed by 0.113; the paired difference was
-0.144 with a 0.95% interval of
+0.144 with a
+95% interval of
 [0.096, 0.193].
 
 Among erroneous traces whose first error occurred after step 0, pooled AUROC was
@@ -45,6 +46,21 @@ from 0.612 to
 ## Probe-versus-control paired intervals
 
 Whole-trace paired bootstrap intervals are in `probe_control_paired_intervals.csv`.
+
+
+## Prefix and metadata shortcut controls
+
+- prefix TF-IDF: AUROC 0.760, Process F1 0.281
+- structural metadata: AUROC 0.780, Process F1 0.147
+- metadata plus final outcome: AUROC 0.857, Process F1 0.288
+
+
+## Trace-equal weighting
+
+Boundary-weighted AUROC was 0.866; assigning every trace equal
+total weight gave 0.867 (difference
++0.001, 95% interval [-0.007,
++0.010]).
 
 
 ## Files

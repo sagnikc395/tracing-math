@@ -164,3 +164,50 @@ def test_interventions_stop_when_readout_specificity_is_zero(tmp_path, monkeypat
     assert (tmp_path / "interventions" / "individual.csv").exists()
     progress = json.loads((tmp_path / "interventions" / "progress.json").read_text())
     assert progress["status"] == "stopped_after_baseline"
+
+
+def test_interventions_stop_when_readout_ranks_labels_below_chance(
+    tmp_path, monkeypatch
+) -> None:
+    base_config = ExperimentConfig.from_yaml("configs/experiment1.yaml")
+    config = replace(base_config, extraction=replace(base_config.extraction, output_dir=tmp_path))
+    probe_dir = tmp_path / "probes"
+    probe_dir.mkdir()
+    np.savez(
+        probe_dir / "directions.npz",
+        selected_intervention_layer=0,
+        directions=np.ones((1, 2)),
+        projection_stds=np.ones(1),
+    )
+    metadata = pd.DataFrame({"partition": ["test"]})
+    baseline = pd.DataFrame(
+        {
+            "trace_id": list("abcde"),
+            "step_index": [0] * 5,
+            "invalid_so_far": [1, 1, 0, 0, 0],
+            "direction_type": ["learned"] * 5,
+            "direction_index": [-1] * 5,
+            "alpha": [0.0] * 5,
+            "verdict_score": [0.1, 0.2, 0.9, 0.8, -0.9],
+            "delta_verdict_score": [0.0] * 5,
+        }
+    )
+    monkeypatch.setattr(pipeline, "load_traces", lambda _path: [])
+    monkeypatch.setattr(pipeline, "load_activation_metadata", lambda _path, **_kwargs: metadata)
+    monkeypatch.setattr(pipeline, "HuggingFaceMathModel", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(pipeline, "score_intervention_baseline", lambda *_args, **_kwargs: baseline)
+
+    called = False
+
+    def fail_if_called(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(pipeline, "run_interventions", fail_if_called)
+    pipeline.run_and_save_interventions(config)
+
+    assert not called
+    verdict = json.loads((tmp_path / "interventions" / "behavioral_verdict.json").read_text())
+    assert verdict["specificity_gate_passed"]
+    assert verdict["auroc"] < 0.5
+    assert not verdict["behavioral_validity_gate_passed"]

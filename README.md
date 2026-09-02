@@ -1,4 +1,4 @@
-# Tracing mathematical error detection in language models
+# tracing mathematical error detection in language models
 
 This repository studies when a mathematics-specialized language model internally registers that a
 written solution has become invalid, how precisely that signal localizes the first error, and

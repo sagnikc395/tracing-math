@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 
+from tracing_math.experiment1.data import ProcessTrace
 from tracing_math.followup.analysis import (
     TraceSeries,
     _bootstrap_outcome_summaries,
@@ -16,7 +17,9 @@ from tracing_math.followup.analysis import (
     length_aware_threshold_analysis,
     matched_placebo_analysis,
     paired_probe_control_intervals,
+    shortcut_control_analysis,
     temporal_randomization_test,
+    trace_equal_weight_sensitivity,
 )
 from tracing_math.localization import first_crossing
 
@@ -280,3 +283,76 @@ def test_vectorized_subgroup_bootstrap_matches_row_resampling() -> None:
         ]
     )
     pd.testing.assert_frame_equal(vectorized, reference)
+
+
+def test_shortcut_controls_use_prefix_text_and_frozen_partitions() -> None:
+    traces = []
+    fit_rows = []
+    test_rows = []
+    for partition in ("train", "validation", "test"):
+        for status, label in (("good", -1), ("bad", 1)):
+            trace_id = f"{partition}-{status}"
+            steps = ("start neutral", "wrong contradiction" if label >= 0 else "valid follows")
+            traces.append(
+                ProcessTrace(
+                    trace_id=trace_id,
+                    source="math",
+                    generator="generator",
+                    problem=f"problem {trace_id}",
+                    steps=steps,
+                    label=label,
+                    final_answer_correct=label < 0,
+                )
+            )
+            for step_index in range(2):
+                row = {
+                    "trace_id": trace_id,
+                    "source": "math",
+                    "generator": "generator",
+                    "partition": partition,
+                    "step_index": step_index,
+                    "step_fraction": (step_index + 1) / 2,
+                    "first_error": label,
+                    "n_steps": 2,
+                    "token_count": 20,
+                    "final_answer_correct": int(label < 0),
+                    "label": int(label >= 0 and step_index >= label),
+                }
+                (test_rows if partition == "test" else fit_rows).append(row)
+
+    controls, predictions = shortcut_control_analysis(
+        pd.DataFrame(fit_rows),
+        pd.DataFrame(test_rows).drop(columns="partition"),
+        traces,
+        seed=42,
+    )
+
+    assert set(controls["control"]) == {
+        "prefix TF-IDF",
+        "structural metadata",
+        "metadata plus final outcome",
+    }
+    assert len(predictions) == 3 * len(test_rows)
+    assert predictions.groupby("control")["threshold"].nunique().eq(1).all()
+
+
+def test_trace_equal_weighting_reports_paired_sensitivity() -> None:
+    predictions = pd.DataFrame(
+        {
+            "trace_id": ["short", "long", "long", "long", "long"],
+            "label": [0, 0, 1, 1, 1],
+            "score": [0.2, 0.8, 0.9, 0.7, 0.6],
+        }
+    )
+    result = trace_equal_weight_sensitivity(
+        predictions,
+        threshold=0.5,
+        samples=50,
+        seed=42,
+        confidence_level=0.95,
+    ).set_index("metric")
+
+    assert set(result.index) == {"auroc", "average_precision", "step_f1"}
+    assert result.loc["auroc", "trace_equal_weighted"] != result.loc[
+        "auroc", "boundary_weighted"
+    ]
