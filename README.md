@@ -12,7 +12,9 @@ workshop.
 ## Current status — September 1, 2026
 
 **The reported Experiment 1 and original CPU follow-up are complete. The workshop follow-up
-pipeline is implemented; its GPU stages and regenerated compact artifacts remain to be run.**
+pipeline is implemented; the transition probe and boundary control are complete, the
+counterfactual pairs are drafted for review (135 of 160 corrections drafted, 25 withheld, none
+verified), and patching plus the regenerated compact artifacts remain to be run.**
 
 The Experiment 1 analysis, compact result package, three paper figures, detailed result report, and
 compiled manuscript are complete. The follow-up reuses frozen Experiment 1 predictions and causal
@@ -28,9 +30,9 @@ It does not load the language model or extract new activations.
 | Original CPU-only follow-up run and interpretation | Complete |
 | Yes/No verdict baseline and gated intervention rerun | Implemented; GPU rerun pending |
 | Length-aware thresholds and paired probe-control intervals | Implemented; frozen fit/control predictions pending |
-| Matched first-error transition probe | Implemented; original activation shards required |
-| Natural-token versus marker-token control | Implemented; GPU extraction pending |
-| Verified counterfactual activation patching | Implemented; annotation and GPU run pending |
+| Matched first-error transition probe | Complete: AUROC 0.769 vs matched placebos |
+| Natural-token versus marker-token control | Complete: signal does not require the marker |
+| Verified counterfactual activation patching | Implemented; 160 pairs drafted (135 corrections, 25 withheld), review and GPU run pending |
 | Same-family 7B replication | Added to Colab notebook; optional GPU run |
 
 The compiled PDF is [paper/neurips_2026.pdf](paper/neurips_2026.pdf). The full Experiment 1 report
@@ -48,8 +50,11 @@ been added to the paper.
 The separate extended follow-up uses `configs/experiment3.yaml` and the
 `math-error-extended-followup` command. It does not change the frozen Experiment 1 split, target,
 layer-selection rule, or intervention doses. Transition probing and boundary-location comparisons
-are marked post-hoc. Counterfactual patching accepts only rows explicitly marked `verified`; the
-template generator leaves corrected mathematical steps blank rather than manufacturing evidence.
+are marked post-hoc. Counterfactual patching accepts only rows explicitly marked `verified`;
+`data/processed/counterfactual_pairs.jsonl` now carries drafted corrections with `annotation_notes`
+for every pair, but all 160 rows remain unverified, and the template generator plus
+`apply_corrections.py` leave corrected mathematical steps reviewable rather than manufacturing
+evidence.
 
 ## Experiment 1 results
 
@@ -130,9 +135,9 @@ invalid.
 ```text
 .
 ├── configs/
-│   ├── experiment.yaml          # Experiment 1 scientific configuration
+│   ├── experiment1.yaml         # Experiment 1 scientific configuration
 │   ├── experiment2_cpu.yaml     # CPU follow-up resampling and output settings
-│   └── experiment3_extended.yaml  # extended post-hoc experiment settings
+│   └── experiment3.yaml         # extended post-hoc experiment settings
 ├── data/processed/              # downloaded ProcessBench JSONL; ignored by Git
 ├── src/tracing_math/
 │   ├── experiment1/
@@ -245,7 +250,7 @@ loading the activation tensors again.
 
 Experiment 2 is the CPU-only follow-up. It reads the frozen Experiment 1 outputs and does not load
 the language model or activation shards. Before running it, check that the paths configured in
-`configs/experiment2.yaml` point to the compact Experiment 1 artifact directory and the
+`configs/experiment2_cpu.yaml` point to the compact Experiment 1 artifact directory and the
 processed ProcessBench JSONL. The default paths are `artifacts/experiment1/qwen2.5-math-1.5b` and
 `data/processed/processbench.jsonl`.
 

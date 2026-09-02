@@ -4,7 +4,7 @@
 \makeatletter
 \def\input@path{{starter/}}
 \makeatother
-\usepackage[dblblindworkshop]{neurips_2026}
+\usepackage[dblblindworkshop,nonanonymous]{neurips_2026}  % drop nonanonymous for blind submission
 
 \usepackage[T1]{fontenc}
 \usepackage{amsmath}
@@ -24,15 +24,16 @@
 Tracing the First Error in Hidden States}
 \workshoptitle{Interpretability for Discovery}
 
-\author{Anonymous Author(s)}
+\author{Sagnik Chatterjee\\
+University of Massachusetts Amherst\\
+\texttt{sagnikchatte@umass.edu}}
 
 \begin{document}
 
 \maketitle
 
 \begin{abstract}
-Language models can produce fluent mathematical solutions even after the reasoning has failed.  We
-ask whether a math-specialized model's hidden states register the first invalid step.  At every
+We ask whether a math-specialized model's hidden states register the first invalid step.  At every
 retained step boundary in the 3,400-trace ProcessBench dataset, we record the residual-stream state
 of \model{} and train layer-wise linear probes to predict whether the solution is invalid so far.
 With problem-grouped splits and validation-only model selection, the selected probe obtains
@@ -51,18 +52,18 @@ show precise timing or behavioral use.
 
 \section{Introduction}
 
-Outcome accuracy hides an important failure mode of mathematical reasoning: a solution can reach a
-wrong answer through one early mistake, or reach the right answer through an invalid derivation.
-Verifiers therefore increasingly score intermediate steps rather than only final answers
+A solution can reach a wrong answer through one early mistake, or reach the right answer through an
+invalid derivation. Outcome accuracy hides this distinction, and verifiers increasingly score
+intermediate steps rather than only final answers
 \citep{cobbe2021verifiers,lightman2023verify}.  Yet an external verifier leaves open a mechanistic
 question: when a solution first becomes invalid, does the solving model's own representation change
 in a detectable way?
 
-An internal signal near the first invalid step would provide evidence that the model tracks errors
-during an extended computation.  It might also support lightweight detection.  But three claims
-must be separated.  A state may contain decodable information without localizing the transition;
-a direction may rank examples across domains without transferring its threshold; and the model's
-output computation need not use a decodable direction
+An internal signal near the first invalid step would show that the model tracks errors during an
+extended computation, and it might support lightweight detection.  Three claims have to be kept
+apart.  A state may contain decodable information without localizing the transition; a direction
+may rank examples across domains without transferring its threshold; and the model's output
+computation need not use a decodable direction
 \citep{hewitt2019control,elazar2021amnesic}.
 
 We study these distinctions in \model{} \citep{yang2024qwenmath} on \dataset{}, whose human
@@ -79,9 +80,9 @@ Our main findings are:
   high within erroneous traces (AUROC $0.873$).
   \item The ranking signal transfers across all 12 off-diagonal source pairs, but exact localization
   is weaker and less calibrated: only $28.9\%$ of erroneous traces are localized exactly.
-  \item The preregistered additive intervention yields no signed dose response.  However, the
-  underlying explicit verdict score fails to distinguish valid from invalid boundaries, so this
-  result cannot adjudicate whether the decoded signal is causally used.
+\item The preregistered additive intervention yields no signed dose response.  However, the
+underlying explicit verdict score fails to distinguish valid from invalid boundaries, so this
+result cannot say whether the decoded signal is causally used.
 \end{itemize}
 
 \section{Related work}
@@ -272,27 +273,42 @@ $0.283$.  Valid boundaries even have a larger mean incorrect-minus-correct margi
 invalid boundaries (5.625).  We can conclude only that this additive intervention, at index 23 and
 the marked boundary, did not detectably affect this degenerate teacher-forced verdict score.
 
-\section{Discussion and limitations}
-
-The probe separates prefixes around human-annotated errors and transfers in ranking, but it often
+\section{Discussion and limitations}The probe separates prefixes around human-annotated errors and transfers in ranking, but it often
 fires late and is not shown to drive a correctness judgment.  A post-hoc analysis of the frozen
 test scores found $28.9\%$ exact localization versus $16.4\%$ after circular within-trace shifts
 ($p=0.0002$).  The score rose by $0.257$ at the annotated onset; matched transitions in correct
 traces rose by $0.113$, a difference of $0.144$ (95\% CI $[0.096,0.193]$).  First-step centering
-left pooled within-error-trace AUROC at $0.881$.  These checks support a gradual temporal change,
-not a precise alarm, and remain post-hoc.
+left pooled within-error-trace AUROC at $0.881$.  Two further post-hoc tests refine this picture.
+A probe trained on matched boundary-to-boundary transitions distinguishes error onsets from
+metadata-matched correct-trace transitions at AUROC $0.769$ (CI $[0.713,0.820]$), above the
+position ($0.63$), TF--IDF ($0.67$), and shuffled ($0.58$) controls, so a representation change at
+the onset itself is linearly decodable.  Re-probing the natural last token of each step instead of
+the artificial marker reproduces the pipeline at AUROC $0.868$ versus $0.866$ (paired difference
+$+0.002$, CI $[-0.007,+0.011]$), so the signal does not depend on the step marker.  These checks
+support a gradual temporal change, not a precise alarm, and remain post-hoc.
 
 The score may still encode generator identity, trace-wide difficulty, final-answer outcome, or
-features beyond TF--IDF.  The persistent target and artificial marker may reward accumulated
-corruption or create a summary state.  We test one model and split at one token location, layer, and
-intervention.  The compact release lacks retained train/validation and exclusion counts; transfer
-cells and probe--control gaps lack paired intervals.  Accessible information is not evidence of causal use.
+features beyond TF--IDF.  The persistent target may reward accumulated corruption or create a
+summary state; the marker-dependence concern is addressed by the boundary control above, but the
+other shortcut channels remain untested.  We test one model and split at one token location, layer,
+and intervention.  The compact release lacks retained train/validation and exclusion counts.
+Paired bootstrap intervals over 669 traces (2,000 resamples) show the probe's AUROC edge over the
+current-step TF--IDF control at $+0.133$ (CI $[0.111,0.155]$) and over the position control at
+$+0.136$ (CI $[0.113,0.157]$); cross-model transfer cells remain unpaired.  A planned counterfactual
+test would splice the boundary state of an erroneous prefix into a corrected twin and ask whether
+the model's verdict flips; correction drafts for all 160 pairs exist but 25 await verification, so
+the run and the causal question it would settle stay open.
 
 \paragraph{Responsible use.}
 
 This study uses no human-subject data and deploys no verifier.  False alarms, delayed detection,
 distribution shift, and adversarial traces make the probe unsuitable for high-stakes grading or
 certification.  Consequential calculations still require human or formal verification.
+
+\section*{Acknowledgments}
+
+The author thanks the ProcessBench and Qwen teams for releasing the dataset and model checkpoints
+used here.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
