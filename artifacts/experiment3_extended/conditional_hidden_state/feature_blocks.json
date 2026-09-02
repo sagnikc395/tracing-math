@@ -1,0 +1,25 @@
+{
+  "N": [
+    "prefix_tfidf",
+    "structural_metadata"
+  ],
+  "N+H": [
+    "prefix_tfidf",
+    "structural_metadata",
+    "hidden_layer_23"
+  ],
+  "O": [
+    "prefix_tfidf",
+    "structural_metadata",
+    "final_answer_correct_oracle"
+  ],
+  "O+H": [
+    "prefix_tfidf",
+    "structural_metadata",
+    "final_answer_correct_oracle",
+    "hidden_layer_23"
+  ],
+  "H": [
+    "hidden_layer_23"
+  ]
+}

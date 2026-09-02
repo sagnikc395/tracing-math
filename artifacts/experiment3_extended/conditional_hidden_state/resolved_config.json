@@ -1,0 +1,52 @@
+{
+  "analysis": "E1_conditional_hidden_state",
+  "experiment1_dir": "/content/drive/MyDrive/math-error-tracing/artifacts/qwen2.5-math-1.5b-a100-bf16",
+  "data_path": "/content/drive/MyDrive/math-error-tracing/data/processbench.jsonl",
+  "model": "Qwen/Qwen2.5-Math-1.5B-Instruct",
+  "selected_layer": 23,
+  "target": "invalid_so_far",
+  "conditions": {
+    "N": [
+      "prefix_tfidf",
+      "structural_metadata"
+    ],
+    "N+H": [
+      "prefix_tfidf",
+      "structural_metadata",
+      "hidden_layer_23"
+    ],
+    "O": [
+      "prefix_tfidf",
+      "structural_metadata",
+      "final_answer_correct_oracle"
+    ],
+    "O+H": [
+      "prefix_tfidf",
+      "structural_metadata",
+      "final_answer_correct_oracle",
+      "hidden_layer_23"
+    ],
+    "H": [
+      "hidden_layer_23"
+    ]
+  },
+  "c_values": [
+    0.01,
+    0.1,
+    1.0,
+    10.0
+  ],
+  "max_iter": 2000,
+  "class_weight": "balanced",
+  "training_weighting": "trace_equal",
+  "selection_metric": "validation_auroc",
+  "threshold_selection": "validation_process_f1",
+  "tfidf_min_df": 2,
+  "tfidf_max_features": 20000,
+  "bootstrap_unit": "trace",
+  "bootstrap_samples": 1000,
+  "confidence_level": 0.95,
+  "practical_auroc_margin": 0.02,
+  "seed": 42,
+  "sha256": "c4b87dfc613b82c1b6b1ea12a1512777beee77670712d24168a468b7424b8356"
+}

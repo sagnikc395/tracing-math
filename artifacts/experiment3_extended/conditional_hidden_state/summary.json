@@ -1,0 +1,24 @@
+{
+  "status": "complete",
+  "analysis_scope": "post_hoc",
+  "selected_layer": 23,
+  "conditions": [
+    "N",
+    "N+H",
+    "O",
+    "O+H",
+    "H"
+  ],
+  "test_traces": 669,
+  "practical_auroc_margin": 0.02,
+  "config_sha256": "c4b87dfc613b82c1b6b1ea12a1512777beee77670712d24168a468b7424b8356",
+  "artifacts": {
+    "metrics": "metrics.csv",
+    "selection": "validation_selection.csv",
+    "predictions": "test_predictions.csv",
+    "paired_intervals": "paired_differences.csv",
+    "feature_blocks": "feature_blocks.json",
+    "result_record": "result_record.md"
+  },
+  "updated_at": "2026-09-02T17:51:59.412493+00:00"
+}
