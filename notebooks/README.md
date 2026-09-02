@@ -9,6 +9,10 @@ an `HF_TOKEN`, runs `fit-contextual-baseline`, and can push only its generated M
 Add both tokens as Colab secrets and grant the notebook access. It never stages data, activation
 shards, embeddings, or other Drive artifacts.
 
+[`e4_e5_e6_colab.ipynb`](e4_e5_e6_colab.ipynb) runs five trace-equal group-split refits for E4,
+the three transition-matching variants for E5, and calibration metrics plus a reliability diagram for
+E6. It uses the same private-clone and optional result-record push flow.
+
 The notebook assumes that the repository is already available in the Colab runtime or on Google
 Drive. It mounts Drive for data, checkpoints, logs, and artifacts. It does not clone a repository,
 read credentials, change Git state, or contact remote services.

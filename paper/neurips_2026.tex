@@ -42,11 +42,12 @@ selected-layer hidden representation to the text and metadata model improves AUR
 [95\% CI $[0.0414,0.0745]$], log loss by $-0.0798$ [95\% CI $[-0.1038,-0.0548]$], and Process F1 by
 $+0.1866$ [95\% CI $[0.1397,0.2340]$] on the inspected split. The probe does not reliably localize the
 first error: exact localization is $28.9\%$, correct-trace rejection is $61.2\%$, and detected
-errors occur $0.59$ steps late on average. A post-hoc matched transition probe reaches AUROC
-$0.769$ on 380 held-out pairs, but placebo reuse and covariate imbalance make this result
-exploratory. The revised behavioral readout has AUROC $0.342$, so it fails the intervention
-validity gate. The evidence supports incremental predictive information in this case study. It
-does not establish generalization, calibration, self-monitoring, localization, or causal use.
+errors occur $0.59$ steps late on average. A post-hoc MiniLM baseline using only the visible prefix
+reaches AUROC $0.753$. A post-hoc matched transition probe reaches AUROC $0.769$ on 380 held-out
+pairs, but placebo reuse and covariate imbalance make this result exploratory. The revised
+behavioral readout has AUROC $0.342$, so it fails the intervention validity gate. The evidence
+supports incremental predictive information in this case study. It does not establish generalization,
+calibration, self-monitoring, localization, or causal use.
 \end{abstract}
 
 \section{Introduction}
@@ -166,6 +167,12 @@ $O$. $H$ contains the hidden representation alone. Every feature set uses the sa
 validation, and test partitions, the same regularization grid, trace-equal training weights, and
 refit on train plus validation. Paired intervals resample whole traces 1,000 times.
 
+As a separate post-hoc semantic control, we encode the problem and prefix through the current
+boundary with mean-pooled \texttt{sentence-transformers/all-MiniLM-L6-v2} embeddings, then fit the
+same trace-equal linear-head, validation-$C$, and validation-threshold procedure. This control has
+no future steps, final-answer field, or target-model hidden state. Its result record does not pin an
+encoder revision or preserve paired bootstrap draws, so we report point estimates only.
+
 \subsection{Post-hoc temporal and onset analyses}
 
 The temporal analyses were designed after inspecting the primary test result. We circularly shift
@@ -213,6 +220,12 @@ metadata, and $0.810$ for their joint model. The outcome-augmented metadata mode
 and the outcome-augmented joint model reaches $0.874$. The latter uses final-answer correctness,
 so it is not a deployable baseline.
 
+The post-hoc contextual prefix baseline selected $C=0.01$ with validation AUROC $0.758$. On the
+same 669 held-out traces, it reaches AUROC $0.753$, average precision $0.673$, log loss $0.596$,
+and Process F1 $0.268$. These point estimates are below the hidden probe, but the saved result has
+no paired interval and the encoder revision is not pinned. This single baseline does not rule out
+other visible-text representations.
+
 The conditional comparison gives the direct test of incremental prediction. $N$ alone reaches
 AUROC $0.811$, log loss $0.533$, and Process F1 $0.211$. $N+H$ reaches AUROC $0.869$, log loss
 $0.454$, and Process F1 $0.397$. The paired changes are AUROC $+0.0587$ [95\% CI
@@ -239,6 +252,7 @@ not available to an online detector.}
 Predictor & AUROC & Proc. F1 & Error exact & Corr. rej. \\
 \midrule
 Hidden state & .866 & .393 & .289 & .612 \\
+Contextual prefix (MiniLM) & .753 & .268 & -- & -- \\
 Prefix TF-IDF & .751 & .274 & .192 & .477 \\
 Structural metadata & .776 & .168 & .148 & .194 \\
 Joint text + metadata & .810 & .210 & .169 & .278 \\
@@ -343,10 +357,11 @@ or that the model uses the feature in its own verdict.
 The study uses one model, one benchmark construction, and one fixed partition. The post-hoc audits
 were designed after the primary result. Their intervals describe resampling uncertainty within the
 completed pipeline, not sensitivity to a new split, model, or selection procedure. The persistent
-target labels all later boundaries after an annotated error. The visible controls do not cover every
-possible textual or generator shortcut. The final-answer field is unavailable online. The source
-transfer analysis measures ranking, while threshold-dependent metrics vary more strongly. Probability
-calibration was not tested as a separate research question.
+target labels all later boundaries after an annotated error. The MiniLM prefix baseline is one
+unpaired post-hoc comparison with an unpinned encoder revision; it does not cover every textual or
+generator shortcut. The final-answer field is unavailable online. The source transfer analysis
+measures ranking, while threshold-dependent metrics vary more strongly. Probability calibration was
+not tested as a separate research question.
 
 The transition analysis excludes 52 test traces whose first error is at step 0 and uses reused
 placebo traces. The natural-token control and temporal randomization were also post-hoc. Counterfactual
@@ -362,11 +377,12 @@ a research diagnostic paired with human or formal verification only.
 
 In \model{} reading \dataset{} traces, invalid-so-far prefixes are linearly decodable. The nested
 comparison shows an incremental held-out gain from adding the selected hidden representation to
-prefix text and structural metadata on the inspected split. The gain is not a complete verifier:
-localization remains weak, correct-trace rejection is limited, threshold behavior varies across
-sources and lengths, and the native behavioral readout fails its AUROC gate. The appropriate claim
-is therefore incremental predictive information in a bounded case study, not localization,
-self-monitoring, generalization, calibration, or causal use.
+prefix text and structural metadata on the inspected split. A contextual visible-prefix baseline is
+also below the hidden probe by point estimate, but it is one unpaired post-hoc run. The gain is not a
+complete verifier: localization remains weak, correct-trace rejection is limited, threshold behavior
+varies across sources and lengths, and the native behavioral readout fails its AUROC gate. The
+appropriate claim is therefore incremental predictive information in a bounded case study, not
+localization, self-monitoring, generalization, calibration, or causal use.
 
 \bibliographystyle{plainnat}
 \bibliography{references}

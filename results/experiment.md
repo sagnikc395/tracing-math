@@ -19,7 +19,8 @@ corresponding artifact is present.
 | Experiment 3A | Matched error-onset transition probe | Experiment 1 activation shards | Complete; post-hoc | `artifacts/experiment3_extended/transition_probe/` |
 | Experiment 3B | Natural-token versus artificial-marker boundary control | New boundary activation extraction plus frozen selection | Complete; post-hoc | `artifacts/experiment3_extended/boundary_control/` |
 | Experiment 3C | Conditional hidden-state versus nuisance-feature comparison | Experiment 1 activation shards and frozen partitions | Complete; post-hoc | `artifacts/experiment3_extended/conditional_hidden_state/` |
-| Experiment 3D | Counterfactual activation patching | Human-verified corrected steps required | Pending | No patching artifact |
+| Experiment 3D | Contextual visible-prefix baseline | ProcessBench prefixes and Experiment 1 shard metadata | Complete; post-hoc | `results/contextual_baseline_20260902T220704Z.md` |
+| Experiment 3E | Counterfactual activation patching | Human-verified corrected steps required | Pending | No patching artifact |
 
 Experiment 2 and Experiment 3 were designed after inspecting the primary results. They are robustness
 or diagnostic analyses, not untouched confirmations of the primary hypothesis.
@@ -436,6 +437,13 @@ to prefix text increased AUROC by `+0.059` [0.041, 0.075] and reduced log loss b
 [−0.104, −0.055] relative to prefix text alone, under its resolved trace-equal protocol. This is
 an analysis result, not a new untouched test.
 
+The contextual visible-prefix baseline used mean-pooled `sentence-transformers/all-MiniLM-L6-v2`
+embeddings of the problem and prefix through the current boundary. It selected `C = 0.01` with
+validation AUROC 0.7584. On the 669 held-out traces it reached AUROC 0.7532, average precision
+0.6725, log loss 0.5961, and Process F1 0.2684. It did not receive future steps, final-answer
+correctness, or target-model hidden states. The saved result record has no paired intervals, exact
+localization metrics, or pinned encoder revision, so these values are descriptive.
+
 ## 7. Post-hoc extended analyses
 
 ### 7.1 Matched error-onset transition probe
@@ -486,6 +494,15 @@ AUROC 0.869 and Process F1 0.397, compared with AUROC 0.811 and Process F1 0.211
 alone. The paired `N+H - N` AUROC difference was +0.059 [0.041, 0.075]. The feature block also
 included an oracle-assisted final-answer outcome; that outcome is not available to an online
 monitor.
+
+### 7.4 Contextual visible-prefix baseline
+
+The MiniLM baseline encoded only the problem and prefix through the current boundary. On 669 held-out
+traces, it reached AUROC 0.7532, average precision 0.6725, log loss 0.5961, and Process F1 0.2684.
+The selected `C = 0.01` had validation AUROC 0.7584. The point estimates are below the layer-23
+hidden probe, but this is one post-hoc run with no paired uncertainty artifact and no pinned encoder
+revision. It does not establish that hidden states contain information unavailable to every visible
+text representation.
 
 ## 8. Counterfactual patching status
 
@@ -569,7 +586,7 @@ All numerical claims in this record come from these files:
 | `artifacts/experiment3_extended/transition_probe/` | Matched transition probe and diagnostics |
 | `artifacts/experiment3_extended/boundary_control/` | Natural-token versus marker control |
 | `artifacts/experiment3_extended/conditional_hidden_state/` | Conditional nuisance comparison |
-| `artifacts/experiment3_extended/contextual_text_baseline/` | Optional frozen visible-text semantic baseline (unrun) |
+| `results/contextual_baseline_20260902T220704Z.md` | Contextual visible-prefix baseline result record |
 
 Generated datasets, activation shards, model caches, and run outputs are not source files and should
 remain outside Git.
@@ -596,6 +613,8 @@ The completed primary and follow-up analyses support these statements:
    `P(Yes) - P(No)` readout. The readout baseline was weak, so this is an inconclusive causal test,
    not proof that the representation is causally inert.
 6. Counterfactual activation patching has not run because its corrections are not human-verified.
+7. One contextual visible-prefix baseline had lower point estimates than the hidden probe, but its
+   result record has no paired intervals or pinned encoder revision.
 
 Limitations:
 
@@ -611,5 +630,7 @@ Limitations:
   single-token readout.
 - The CPU and extended analyses were selected after inspecting primary results and are not
   independent confirmations.
+- The contextual baseline is one unpaired post-hoc run and does not rule out other visible-text
+  encoders.
 - The primary artifacts do not preserve the exact GPU host, wall-clock duration, or full extraction
   progress log.

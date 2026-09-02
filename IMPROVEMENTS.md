@@ -13,8 +13,7 @@ correction is valid. Do not bypass that gate or report a patching result.
 The remaining evidence gaps are optional strengthening work, not blockers for closing the current
 paper:
 
-1. a contextual semantic baseline to test whether the gain is more than a TF-IDF limitation;
-2. a frozen replication or outer-fold evaluation to test whether the nested gain survives an
+1. a frozen replication or outer-fold evaluation to test whether the nested gain survives an
    untouched protocol.
 
 The repository contains the completed primary run and several post-hoc diagnostics. Close the paper
@@ -52,6 +51,9 @@ These items are completed and reflected in the revised paper:
 - a validity gate that correctly prevents interpretation of the failed causal pilot;
 - onset-task eligibility audit (52 step-0 traces excluded, documented);
 - environment record for reproducibility.
+- E3: one contextual visible-prefix baseline. Mean-pooled MiniLM reached held-out AUROC 0.7532,
+  average precision 0.6725, log loss 0.5961, and Process F1 0.2684 on 669 traces; it is post-hoc,
+  has no paired interval artifact, and did not pin an encoder revision.
 
 Two implemented analyses remain unexecuted:
 
@@ -67,7 +69,7 @@ paper.
 
 | Priority | Work item | Main question | Why it changes the decision | Cost |
 |---|---|---|---|---|
-| **P0** | E3: contextual text-only baseline | Is the localization advantage more than semantic processing of visible text? | TF-IDF is too weak to isolate hidden-specific value. A contextual encoder matching the hidden score reduces the contribution to a TF-IDF limitation. | Moderate |
+| Complete | E3: contextual text-only baseline | Is the localization advantage more than semantic processing of visible text? | MiniLM's AUROC 0.7532 is below the hidden probe by point estimate, but one unpaired run does not rule out other encoders. | Complete |
 | **P0** | E2: frozen confirmatory replication | Does the nested gain survive on an untouched split or model? | The current headline analyses are post-hoc on an inspected test set. More bootstrap draws do not fix this. | One new extraction plus CPU analysis |
 | **P1** | E5: transition matching sensitivity | Is AUROC 0.769 driven by reused placebos or residual imbalance? | This is the paper's most onset-specific result. | Low once shards are available |
 | **P1** | E4 (complete): split sensitivity across seeds | Is the nested gain stable across group assignments? | Current uncertainty conditions on one split. | Moderate; no new labels |
@@ -127,17 +129,20 @@ robustness, but they are not an untouched replication.
 
 ## E3. Add one contextual text-only baseline
 
-**Status:** missing; high value for the surviving localization claim.
+**Status:** complete, post-hoc, and descriptive. The mean-pooled
+`sentence-transformers/all-MiniLM-L6-v2` baseline selected `C = 0.01` with validation AUROC 0.7584.
+On 669 held-out traces it reached AUROC 0.7532, average precision 0.6725, log loss 0.5961, and
+Process F1 0.2684.
 
 Prefix TF-IDF tests lexical shortcuts. It does not test whether an ordinary semantic representation
-of the visible text can localize the error. Choose one contextual text encoder before evaluating the
-test set. Encode only the problem and prefix available at the current boundary, then fit the same
-regularized linear head and threshold-selection procedure used elsewhere.
+of the visible text can localize the error. The completed baseline encoded only the problem and
+prefix available at the current boundary, then fit the same regularized linear head and
+threshold-selection procedure used elsewhere.
 
-The baseline must not receive final-answer correctness, future steps, or target-model hidden states.
-Report its boundary ranking and first-crossing metrics. If it matches the hidden probe, the result is
-about visible-text semantics rather than a hidden-specific error variable. If it does not, the paper
-has a stronger basis for saying that the target representation contributes something beyond TF-IDF.
+It received no final-answer correctness, future steps, or target-model hidden states. The saved result
+record has no paired intervals, first-crossing metrics, or pinned encoder revision. Its point
+estimates are below the hidden probe, but the result does not establish that hidden states contain
+information unavailable to every visible-text representation.
 
 Do not turn this into a model zoo. One frozen contextual baseline with a stated selection rule is
 enough.
@@ -249,16 +254,15 @@ The minimum path to close the current paper is:
 3. Remove any remaining calibration, self-monitoring, precise-localization, or causal-use wording.
 4. Freeze the artifact map, resolved configurations, exclusion counts, and environment record.
 5. Build the paper and run the repository test, lint, and clean-environment checks.
-6. Record any contextual baseline, replication, transition sensitivity, or split sensitivity as
+6. Record any replication, transition sensitivity, or split sensitivity as
    optional follow-up work unless it is actually completed and integrated.
 
 The higher-evidence path remains available when time and compute permit:
 
-1. Run E3 (contextual text baseline).
-2. Freeze the complete E1+E3 protocol as the E2 manifest.
-3. Run E2 (confirmatory replication) once and lock its predictions.
-4. Run E5 (transition sensitivity) if activation shards become available.
-5. Run E4 (split sensitivity) to characterize variability across seeds.
+1. Freeze the complete E1+E3 protocol as the E2 manifest.
+2. Run E2 (confirmatory replication) once and lock its predictions.
+3. Run E5 (transition sensitivity) if activation shards become available.
+4. Run E4 (split sensitivity) to characterize variability across seeds.
 
 ## Definition of done
 
@@ -270,8 +274,8 @@ The experimental package is ready for the paper when all of the following are tr
 - [x] All compared models use documented and matched training weights and selection budgets.
 - [x] Reader-model and self-monitoring claims are not mixed.
 - [x] The causal section makes no use claim while the behavioral readout remains invalid.
-- [ ] One contextual text-only baseline tests the surviving hidden-specific localization claim
-  (optional strengthening; not required to close this version).
+- [x] One contextual text-only baseline tests whether the result is limited to TF-IDF; its unpaired
+  post-hoc result is reported as descriptive rather than decisive.
 - [ ] A frozen confirmatory model or dataset has been evaluated once, or the entire central audit is
   labeled exploratory (optional strengthening; the current audit is labeled exploratory where
   appropriate).
