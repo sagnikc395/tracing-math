@@ -66,6 +66,17 @@ for every pair, but all 160 rows remain unverified, and the template generator p
 `apply_corrections.py` leave corrected mathematical steps reviewable rather than manufacturing
 evidence.
 
+Run the nested nuisance-versus-hidden comparison from the raw Experiment 1 activation shards with:
+
+```bash
+uv run math-error-extended-followup --config configs/experiment3.yaml \
+  fit-conditional-hidden-state
+```
+
+This command fits N, N+H, O, O+H, and H with train-only selection preprocessing, refits on
+train+validation, and saves paired held-out intervals under
+`artifacts/experiment3_extended/conditional_hidden_state/`.
+
 ## Experiment 1 results
 
 At the end marker of each reasoning step, the experiment recorded all 29 residual-stream hidden

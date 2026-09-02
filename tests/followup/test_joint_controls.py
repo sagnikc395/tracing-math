@@ -6,6 +6,8 @@ import pandas as pd
 from tracing_math.experiment1.data import ProcessTrace
 from tracing_math.followup.analysis import (
     _trace_equal_train_weights,
+    correct_trace_overlap_table,
+    main_comparison_table,
     shortcut_control_analysis,
     stratified_probe_control_intervals,
 )
@@ -72,6 +74,39 @@ def test_shortcut_controls_add_tuned_joint_baselines() -> None:
     assert (controls["training_weighting"] == "trace_equal").all()
     assert predictions.groupby("control")["threshold"].nunique().eq(1).all()
     assert len(predictions) == 5 * len(test_rows)
+
+
+def test_generated_comparison_table_uses_consistent_metric_schema() -> None:
+    traces, fit_rows, test_rows = _shortcut_fixture()
+    test = test_rows.drop(columns="partition")
+    controls, control_predictions = shortcut_control_analysis(
+        fit_rows, test, traces, seed=42
+    )
+    hidden = test.copy()
+    hidden["score"] = np.where(hidden["label"].eq(1), 0.9, 0.1)
+
+    table = main_comparison_table(hidden, controls, hidden_threshold=0.5)
+    expected = 2 * table["error_exact"] * table["correct_rejection"] / (
+        table["error_exact"] + table["correct_rejection"]
+    )
+    np.testing.assert_allclose(table["process_f1"], expected)
+    assert {
+        "error_exact",
+        "correct_rejection",
+        "process_f1",
+        "complete_accuracy",
+    }.issubset(table.columns)
+
+    overlap = correct_trace_overlap_table(
+        hidden, control_predictions, hidden_threshold=0.5
+    )
+    assert set(overlap["outcome"]) == {
+        "both_reject",
+        "hidden_only_alarm",
+        "nuisance_only_alarm",
+        "both_alarm",
+    }
+    assert overlap.groupby("control")["count"].sum().eq(1).all()
 
 
 def test_joint_control_with_outcome_uses_final_answer_field() -> None:

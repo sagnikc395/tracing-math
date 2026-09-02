@@ -55,16 +55,16 @@ def localization_metrics(
     error_expected = expected[erroneous]
     detected = erroneous & (predicted >= 0)
     localization_error = predicted[detected] - expected[detected]
-    error_accuracy = _safe_mean(error_predictions == error_expected)
-    correct_accuracy = _safe_mean(predicted[correct] == -1)
-    denominator = error_accuracy + correct_accuracy
+    error_exact = _safe_mean(error_predictions == error_expected)
+    correct_rejection = _safe_mean(predicted[correct] == -1)
+    denominator = error_exact + correct_rejection
     output = {
-        "error_accuracy": error_accuracy,
-        "correct_accuracy": correct_accuracy,
+        "error_exact": error_exact,
+        "correct_rejection": correct_rejection,
         "process_f1": (
-            2 * error_accuracy * correct_accuracy / denominator if denominator > 0 else 0.0
+            2 * error_exact * correct_rejection / denominator if denominator > 0 else 0.0
         ),
-        "first_error_exact": _safe_mean(predicted == expected),
+        "complete_accuracy": _safe_mean(predicted == expected),
         "error_detection_rate": _safe_mean(error_predictions >= 0),
         "error_miss_rate": _safe_mean(error_predictions < 0),
         "correct_false_alarm_rate": _safe_mean(predicted[correct] >= 0),
@@ -82,6 +82,25 @@ def localization_metrics(
         )
         output[f"error_within_{tolerance}_accuracy"] = _safe_mean(within)
     return output
+
+
+def assert_process_f1_identity(metrics: dict[str, float], *, atol: float = 1e-12) -> None:
+    """Reject rows whose Process F1 is inconsistent with its named components."""
+    required = {"error_exact", "correct_rejection", "process_f1"}
+    missing = required.difference(metrics)
+    if missing:
+        raise ValueError(f"Missing Process F1 components: {sorted(missing)}")
+    error_exact = float(metrics["error_exact"])
+    correct_rejection = float(metrics["correct_rejection"])
+    denominator = error_exact + correct_rejection
+    expected = (
+        2 * error_exact * correct_rejection / denominator if denominator > 0 else 0.0
+    )
+    if not np.isclose(float(metrics["process_f1"]), expected, atol=atol, rtol=0):
+        raise ValueError(
+            "Process F1 does not equal the harmonic mean of error_exact and "
+            "correct_rejection"
+        )
 
 
 def outcome_label(expected: int, predicted: int) -> str:

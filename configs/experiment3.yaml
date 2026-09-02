@@ -16,6 +16,11 @@ transition_probe:
   c_values: [0.01, 0.1, 1.0, 10.0]
   max_iter: 2000
 
+conditional_hidden_state:
+  practical_auroc_margin: 0.02
+  tfidf_min_df: 2
+  tfidf_max_features: 20000
+
 boundary_control:
   save_every: 100
   batch_size: 1

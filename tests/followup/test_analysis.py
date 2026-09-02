@@ -57,7 +57,7 @@ def test_temporal_randomization_uses_frozen_within_trace_scores() -> None:
         seed=42,
         confidence_level=0.95,
     )
-    exact = summary.set_index("metric").loc["first_error_exact"]
+    exact = summary.set_index("metric").loc["error_exact"]
     assert exact["observed"] == 1.0
     assert exact["null_mean"] < 1.0
     assert len(draws) == 515

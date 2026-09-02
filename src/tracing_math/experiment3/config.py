@@ -27,6 +27,9 @@ class ExtendedFollowupConfig:
     extraction_batch_size: int = 1
     patching_batch_size: int = 1
     counterfactual_template_size: int = 160
+    conditional_practical_margin: float = 0.02
+    conditional_tfidf_min_df: int = 2
+    conditional_tfidf_max_features: int = 20_000
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ExtendedFollowupConfig:
@@ -37,6 +40,7 @@ class ExtendedFollowupConfig:
         transition = raw.get("transition_probe", {})
         extraction = raw.get("boundary_control", {})
         patching = raw.get("counterfactual_patching", {})
+        conditional = raw.get("conditional_hidden_state", {})
         config = cls(
             experiment1_dir=Path(raw["experiment1_dir"]),
             data_path=Path(raw["data_path"]),
@@ -61,6 +65,17 @@ class ExtendedFollowupConfig:
             counterfactual_template_size=int(
                 patching.get("template_size", cls.counterfactual_template_size)
             ),
+            conditional_practical_margin=float(
+                conditional.get("practical_auroc_margin", cls.conditional_practical_margin)
+            ),
+            conditional_tfidf_min_df=int(
+                conditional.get("tfidf_min_df", cls.conditional_tfidf_min_df)
+            ),
+            conditional_tfidf_max_features=int(
+                conditional.get(
+                    "tfidf_max_features", cls.conditional_tfidf_max_features
+                )
+            ),
         )
         config.validate()
         return config
@@ -81,6 +96,9 @@ class ExtendedFollowupConfig:
             self.extraction_batch_size,
             self.patching_batch_size,
             self.counterfactual_template_size,
+            self.conditional_tfidf_min_df,
+            self.conditional_tfidf_max_features,
         ) < 1:
             raise ValueError("batch, shard, and template sizes must be positive")
-
+        if not 0 <= self.conditional_practical_margin <= 1:
+            raise ValueError("conditional_hidden_state.practical_auroc_margin must be in [0, 1]")

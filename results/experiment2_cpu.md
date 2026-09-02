@@ -111,14 +111,14 @@ control with sample weights inverse to boundary counts so every trace contribute
 training loss. Two joint baselines combine prefix text, structural metadata, and (in the stronger
 variant) final-answer correctness.
 
-| Control | C | AUROC | Process F1 | Exact | Correct rejection |
+| Control | C | AUROC | Process F1 | Error exact | Correct rejection |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Hidden state (frozen) | 0.01 | 0.866 | 0.393 | 0.289 | 0.612 |
-| Prefix TF-IDF | 10.0 | 0.751 | 0.274 | 0.293 | 0.477 |
-| Structural metadata | 10.0 | 0.776 | 0.168 | 0.164 | 0.194 |
-| Metadata plus final outcome | 1.0 | 0.854 | 0.262 | 0.335 | 0.646 |
-| Joint text + metadata | 1.0 | 0.810 | 0.210 | 0.208 | 0.278 |
-| Joint text + metadata + outcome | 1.0 | 0.874 | 0.294 | 0.430 | 0.895 |
+| Prefix TF-IDF | 10.0 | 0.751 | 0.274 | 0.192 | 0.477 |
+| Structural metadata | 10.0 | 0.776 | 0.168 | 0.148 | 0.194 |
+| Metadata plus final outcome | 1.0 | 0.854 | 0.262 | 0.164 | 0.646 |
+| Joint text + metadata | 1.0 | 0.810 | 0.210 | 0.169 | 0.278 |
+| Joint text + metadata + outcome | 1.0 | 0.874 | 0.294 | 0.176 | 0.895 |
 
 Paired whole-trace bootstrap intervals (hidden minus control, 2,000 draws):
 
@@ -134,9 +134,10 @@ Paired whole-trace bootstrap intervals (hidden minus control, 2,000 draws):
 The substantive conclusion changed: under an equally tuned budget, the joint model that combines
 prefix text, structural metadata, and final-answer correctness reaches AUROC 0.874, numerically
 above the hidden state's 0.866, with a paired difference whose interval includes zero. The hidden
-probe's surviving advantage is task-specific: trace-level localization (Process F1 and exact
-first-error accuracy) and a lower false-alarm rate on correct traces than the joint outcome model,
-which crosses threshold on almost every trace. Within final-answer-correctness strata, the hidden
+probe's surviving advantage over the oracle-assisted joint model is erroneous-trace exact
+localization, offset by worse correct rejection. On the 237 correct traces, both models reject 140,
+only the hidden probe alarms on 72, only the joint model alarms on 5, and both alarm on 20. Within
+final-answer-correctness strata, the hidden
 AUROC advantage is 0.073 [0.039, 0.107] among correct-outcome traces and -0.001 [-0.022, 0.021]
 among incorrect-outcome traces.
 

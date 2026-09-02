@@ -28,8 +28,10 @@ from tracing_math.experiment1.data import ProcessTrace, assign_partitions, load_
 from tracing_math.experiment1.probes import binary_metrics, change_point_metrics, choose_threshold
 from tracing_math.followup.config import FollowupConfig
 from tracing_math.localization import (
+    assert_process_f1_identity,
     first_crossing,
     localization_metrics,
+    localization_outcomes,
     outcome_label,
     quantile_interval,
 )
@@ -123,7 +125,20 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         )
         shortcut_controls.to_csv(output / "shortcut_controls.csv", index=False)
         shortcut_predictions.to_csv(output / "shortcut_control_predictions.csv", index=False)
+        main_comparison = main_comparison_table(
+            predictions,
+            shortcut_controls,
+            hidden_threshold=threshold,
+        )
+        main_comparison.to_csv(output / "main_comparison_table.csv", index=False)
+        correct_overlap = correct_trace_overlap_table(
+            predictions,
+            shortcut_predictions,
+            hidden_threshold=threshold,
+        )
+        correct_overlap.to_csv(output / "correct_trace_overlap.csv", index=False)
         availability["shortcut_controls"] = "complete"
+        availability["metric_audit"] = "complete"
 
         LOGGER.info("Running trace-equal-weight sensitivity (%d draws)", config.bootstrap_samples)
         trace_weighting = trace_equal_weight_sensitivity(
@@ -151,6 +166,8 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         length_results = pd.DataFrame()
         shortcut_controls = pd.DataFrame()
         shortcut_predictions = pd.DataFrame()
+        main_comparison = pd.DataFrame()
+        correct_overlap = pd.DataFrame()
         trace_weighting = pd.DataFrame()
         data_flow = pd.DataFrame()
         availability["length_aware_thresholding"] = (
@@ -254,6 +271,8 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         length_results=length_results,
         paired_controls=paired_controls,
         shortcut_controls=shortcut_controls,
+        main_comparison=main_comparison,
+        correct_overlap=correct_overlap,
         trace_weighting=trace_weighting,
         data_flow=data_flow,
         availability=availability,
@@ -664,6 +683,7 @@ def _shortcut_control_outputs(
         "c_value": c_value,
         "training_weighting": "trace_equal",
     }
+    assert_process_f1_identity(row)
     columns = [
         "trace_id",
         "source",
@@ -682,6 +702,119 @@ def _shortcut_control_outputs(
     predictions["threshold"] = threshold
     predictions["c_value"] = c_value
     return row, predictions
+
+
+def main_comparison_table(
+    hidden_predictions: pd.DataFrame,
+    shortcut_controls: pd.DataFrame,
+    *,
+    hidden_threshold: float,
+) -> pd.DataFrame:
+    """Build the audited headline comparison table from one metric schema."""
+    required = {"trace_id", "step_index", "first_error", "label", "score"}
+    missing = required.difference(hidden_predictions.columns)
+    if missing:
+        raise ValueError(f"Missing hidden prediction columns: {sorted(missing)}")
+    hidden = {
+        "predictor": "hidden state",
+        **binary_metrics(
+            hidden_predictions["label"].to_numpy(dtype=int),
+            hidden_predictions["score"].to_numpy(dtype=float),
+            threshold=hidden_threshold,
+        ),
+        **change_point_metrics(
+            hidden_predictions,
+            hidden_predictions["score"].to_numpy(dtype=float),
+            hidden_threshold,
+        ),
+        "threshold": hidden_threshold,
+        "training_weighting": "boundary_equal",
+    }
+    rows = [hidden]
+    for control in shortcut_controls.to_dict(orient="records"):
+        control = dict(control)
+        control["predictor"] = control.pop("control")
+        rows.append(control)
+    for row in rows:
+        assert_process_f1_identity(row)
+    columns = [
+        "predictor",
+        "auroc",
+        "average_precision",
+        "log_loss",
+        "brier_score",
+        "error_exact",
+        "correct_rejection",
+        "process_f1",
+        "error_within_1_accuracy",
+        "error_within_2_accuracy",
+        "complete_accuracy",
+        "threshold",
+        "c_value",
+        "training_weighting",
+    ]
+    frame = pd.DataFrame(rows)
+    return frame.reindex(columns=columns)
+
+
+def correct_trace_overlap_table(
+    hidden_predictions: pd.DataFrame,
+    control_predictions: pd.DataFrame,
+    *,
+    hidden_threshold: float,
+) -> pd.DataFrame:
+    """Count paired false-alarm overlap on held-out correct traces."""
+    required = {"trace_id", "step_index", "first_error", "score"}
+    if missing := required.difference(hidden_predictions.columns):
+        raise ValueError(f"Missing hidden prediction columns: {sorted(missing)}")
+    if missing := (required | {"control", "threshold"}).difference(
+        control_predictions.columns
+    ):
+        raise ValueError(f"Missing control prediction columns: {sorted(missing)}")
+    hidden_expected, hidden_outcomes = localization_outcomes(
+        hidden_predictions,
+        hidden_predictions["score"].to_numpy(dtype=float),
+        hidden_threshold,
+    )
+    trace_ids = (
+        hidden_predictions.groupby("trace_id", sort=False).size().index.astype(str).to_numpy()
+    )
+    rows: list[dict[str, object]] = []
+    for name, group in control_predictions.groupby("control", sort=True):
+        if group["threshold"].nunique() != 1:
+            raise ValueError(f"Control {name!r} has multiple held-out thresholds")
+        expected, outcomes = localization_outcomes(
+            group,
+            group["score"].to_numpy(dtype=float),
+            float(group["threshold"].iloc[0]),
+        )
+        control_ids = group.groupby("trace_id", sort=False).size().index.astype(str).to_numpy()
+        if not np.array_equal(trace_ids, control_ids) or not np.array_equal(
+            hidden_expected, expected
+        ):
+            raise ValueError(f"Control {name!r} does not align with hidden predictions")
+        correct = expected < 0
+        hidden_alarm = hidden_outcomes >= 0
+        nuisance_alarm = outcomes >= 0
+        categories = {
+            "both_reject": ~hidden_alarm & ~nuisance_alarm,
+            "hidden_only_alarm": hidden_alarm & ~nuisance_alarm,
+            "nuisance_only_alarm": ~hidden_alarm & nuisance_alarm,
+            "both_alarm": hidden_alarm & nuisance_alarm,
+        }
+        n_correct = int(correct.sum())
+        for outcome, mask in categories.items():
+            count = int((correct & mask).sum())
+            rows.append(
+                {
+                    "control": name,
+                    "outcome": outcome,
+                    "count": count,
+                    "rate": count / n_correct if n_correct else float("nan"),
+                    "n_correct_traces": n_correct,
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def stratified_probe_control_intervals(
@@ -991,7 +1124,7 @@ def temporal_randomization_test(
     draws = pd.concat(draw_batches, ignore_index=True)
     tail = (1 - confidence_level) / 2
     specifications = {
-        "first_error_exact": "higher",
+        "error_exact": "higher",
         "error_within_1_accuracy": "higher",
         "error_within_2_accuracy": "higher",
         "process_f1": "higher",
@@ -1058,10 +1191,10 @@ def _trace_metric_draws(expected: np.ndarray, predicted: np.ndarray) -> pd.DataF
         where=denominator > 0,
     )
     output = {
-        "first_error_exact": error_accuracy,
+        "error_exact": error_accuracy,
         "correct_rejection": correct_accuracy,
         "process_f1": process_f1,
-        "complete_trace_accuracy": (predicted == expected).mean(axis=1),
+        "complete_accuracy": (predicted == expected).mean(axis=1),
         "error_detection_rate": detected.mean(axis=1),
         "mean_signed_localization_error": detected_mean(localization_error),
         "mean_absolute_localization_error": detected_mean(np.abs(localization_error)),
@@ -1309,7 +1442,7 @@ def subgroup_outcomes(
                 "n_traces": len(group),
                 **point,
             }
-            for metric in ("complete_trace_accuracy", "error_exact", "correct_rejection"):
+            for metric in ("complete_accuracy", "error_exact", "correct_rejection"):
                 values = draw_frame[metric].dropna()
                 bounds = (
                     quantile_interval(values.to_numpy(dtype=float), tail)
@@ -1470,10 +1603,10 @@ def _trace_series(predictions: pd.DataFrame) -> list[TraceSeries]:
 def _trace_metrics(expected: np.ndarray, predicted: np.ndarray) -> dict[str, float]:
     metrics = localization_metrics(expected, predicted, (1, 2))
     return {
-        "first_error_exact": metrics["error_accuracy"],
-        "correct_rejection": metrics["correct_accuracy"],
+        "error_exact": metrics["error_exact"],
+        "correct_rejection": metrics["correct_rejection"],
         "process_f1": metrics["process_f1"],
-        "complete_trace_accuracy": metrics["first_error_exact"],
+        "complete_accuracy": metrics["complete_accuracy"],
         "error_detection_rate": metrics["error_detection_rate"],
         "error_within_1_accuracy": metrics["error_within_1_accuracy"],
         "error_within_2_accuracy": metrics["error_within_2_accuracy"],
@@ -1589,7 +1722,7 @@ def _outcome_summary(frame: pd.DataFrame) -> dict[str, float]:
     correct = ~erroneous
     complete = frame["predicted_first_error"].eq(frame["first_error"])
     return {
-        "complete_trace_accuracy": float(complete.mean()),
+        "complete_accuracy": float(complete.mean()),
         "error_exact": (float(complete[erroneous].mean()) if erroneous.any() else float("nan")),
         "correct_rejection": (
             float(frame.loc[correct, "predicted_first_error"].lt(0).mean())
@@ -1625,7 +1758,7 @@ def _bootstrap_outcome_summaries(
 
     return pd.DataFrame(
         {
-            "complete_trace_accuracy": complete[positions].mean(axis=1),
+            "complete_accuracy": complete[positions].mean(axis=1),
             "error_exact": conditional_mean(complete[positions], sampled_erroneous),
             "correct_rejection": conditional_mean(rejected[positions], sampled_correct),
         }
@@ -1661,9 +1794,9 @@ def _thresholded_process_metrics(
     metrics = localization_metrics(np.asarray(expected), np.asarray(predicted))
     return {
         "process_f1": metrics["process_f1"],
-        "correct_rejection": metrics["correct_accuracy"],
-        "error_exact": metrics["error_accuracy"],
-        "complete_accuracy": metrics["first_error_exact"],
+        "correct_rejection": metrics["correct_rejection"],
+        "error_exact": metrics["error_exact"],
+        "complete_accuracy": metrics["complete_accuracy"],
     }
 
 
@@ -1847,10 +1980,10 @@ def _plot_followup(
 
     observed = float(
         permutation_summary.loc[
-            permutation_summary["metric"].eq("first_error_exact"), "observed"
+            permutation_summary["metric"].eq("error_exact"), "observed"
         ].iloc[0]
     )
-    axes[1].hist(permutation_draws["first_error_exact"], bins=30, color="#777777")
+    axes[1].hist(permutation_draws["error_exact"], bins=30, color="#777777")
     axes[1].axvline(observed, color="#b2182b", linewidth=2, label="Observed")
     axes[1].set(xlabel="Exact localization under circular shifts", ylabel="Count")
     axes[1].legend(frameon=False)
@@ -1886,6 +2019,8 @@ def _build_summary(
     length_results: pd.DataFrame,
     paired_controls: pd.DataFrame,
     shortcut_controls: pd.DataFrame,
+    main_comparison: pd.DataFrame,
+    correct_overlap: pd.DataFrame,
     trace_weighting: pd.DataFrame,
     data_flow: pd.DataFrame,
     availability: dict[str, str],
@@ -1908,9 +2043,9 @@ def _build_summary(
         "test_traces": int(predictions["trace_id"].nunique()),
         "confidence_level": config.confidence_level,
         "temporal_randomization": {
-            "observed_exact": _metric_value(permutation_lookup, "first_error_exact", "observed"),
-            "null_exact_mean": _metric_value(permutation_lookup, "first_error_exact", "null_mean"),
-            "exact_p_value": _metric_value(permutation_lookup, "first_error_exact", "p_value"),
+            "observed_exact": _metric_value(permutation_lookup, "error_exact", "observed"),
+            "null_exact_mean": _metric_value(permutation_lookup, "error_exact", "null_mean"),
+            "exact_p_value": _metric_value(permutation_lookup, "error_exact", "p_value"),
             "observed_within_1": _metric_value(
                 permutation_lookup, "error_within_1_accuracy", "observed"
             ),
@@ -1947,9 +2082,9 @@ def _build_summary(
         },
         "decision": {
             "temporal_alignment_above_shift_null": bool(
-                _metric_value(permutation_lookup, "first_error_exact", "p_value") < 0.05
-                and _metric_value(permutation_lookup, "first_error_exact", "observed")
-                > _metric_value(permutation_lookup, "first_error_exact", "null_mean")
+                _metric_value(permutation_lookup, "error_exact", "p_value") < 0.05
+                and _metric_value(permutation_lookup, "error_exact", "observed")
+                > _metric_value(permutation_lookup, "error_exact", "null_mean")
             ),
             "onset_jump_exceeds_placebo": bool(
                 _metric_value(placebo_lookup, "paired_difference", "ci_low") > 0
@@ -1979,11 +2114,21 @@ def _build_summary(
         summary["probe_control_paired_intervals"] = paired_controls.to_dict(orient="records")
     if not shortcut_controls.empty:
         summary["shortcut_controls"] = shortcut_controls.to_dict(orient="records")
+    if not main_comparison.empty:
+        summary["main_comparison_table"] = _json_records(main_comparison)
+    if not correct_overlap.empty:
+        summary["correct_trace_overlap"] = correct_overlap.to_dict(orient="records")
     if not trace_weighting.empty:
         summary["trace_weighting_sensitivity"] = trace_weighting.to_dict(orient="records")
     if not data_flow.empty:
         summary["data_flow"] = data_flow.to_dict(orient="records")
     return summary
+
+
+def _json_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """Return strict-JSON-compatible records with missing values represented by null."""
+    clean = frame.astype(object).where(pd.notna(frame), None)
+    return clean.to_dict(orient="records")
 
 
 def _metric_value(frame: pd.DataFrame, metric: str, column: str = "estimate") -> float:

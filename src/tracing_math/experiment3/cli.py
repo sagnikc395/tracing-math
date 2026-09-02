@@ -37,6 +37,19 @@ def fit_transition(config: ExtendedFollowupConfig) -> None:
     click.echo(json.dumps(fit_and_save_transition_probe(config), indent=2))
 
 
+@main.command("fit-conditional-hidden-state")
+@click.pass_obj
+def fit_conditional_hidden_state(config: ExtendedFollowupConfig) -> None:
+    """Run the nested nuisance-versus-hidden E1 comparison."""
+    from tracing_math.experiment3.pipeline import fit_and_save_conditional_hidden_state
+
+    try:
+        result = fit_and_save_conditional_hidden_state(config)
+    except FileNotFoundError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(json.dumps(result, indent=2))
+
+
 @main.command("analyze-transition-matching")
 @click.pass_obj
 def analyze_transition_matching(config: ExtendedFollowupConfig) -> None:
@@ -90,4 +103,3 @@ def patch_counterfactuals(config: ExtendedFollowupConfig) -> None:
 
 if __name__ == "__main__":
     main()
-

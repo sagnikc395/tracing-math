@@ -66,8 +66,9 @@ def test_change_point_metrics_recover_first_error_and_correct_trace() -> None:
     )
     scores = np.array([0.1, 0.8, 0.9, 0.1, 0.2])
     result = change_point_metrics(metadata, scores, threshold=0.5)
-    assert result["error_accuracy"] == 1.0
-    assert result["correct_accuracy"] == 1.0
+    assert result["error_exact"] == 1.0
+    assert result["correct_rejection"] == 1.0
+    assert result["complete_accuracy"] == 1.0
     assert result["process_f1"] == 1.0
     assert choose_threshold(metadata, scores) == pytest.approx(0.5, abs=0.45)
 
@@ -77,7 +78,7 @@ def test_change_point_metrics_uses_recorded_step_indices() -> None:
         {"trace_id": ["bad", "bad"], "step_index": [4, 7], "first_error": [7, 7]}
     )
     result = change_point_metrics(metadata, np.array([0.1, 0.9]), threshold=0.5)
-    assert result["error_accuracy"] == 1.0
+    assert result["error_exact"] == 1.0
 
 
 def test_layer_probe_pipeline_smoke() -> None:
@@ -159,7 +160,7 @@ def test_bootstrap_samples_whole_traces() -> None:
         seed=42,
     )
     assert len(result) == 10
-    assert set(result.columns) >= {"auroc", "process_f1", "first_error_exact"}
+    assert set(result.columns) >= {"auroc", "process_f1", "error_exact"}
 
 
 def test_parallel_bootstrap_matches_serial_results() -> None:

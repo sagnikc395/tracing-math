@@ -30,6 +30,7 @@ from tracing_math.experiment3.analysis import (
     transition_matching_diagnostics,
 )
 from tracing_math.experiment3.config import ExtendedFollowupConfig
+from tracing_math.followup.conditional import conditional_hidden_state_analysis
 
 BOUNDARY_LOCATIONS = ("step_content", "marker")
 PATCH_CONDITIONS = (
@@ -38,6 +39,97 @@ PATCH_CONDITIONS = (
     "error_state_into_correct",
     "correct_state_into_error",
 )
+
+
+def fit_and_save_conditional_hidden_state(
+    config: ExtendedFollowupConfig,
+) -> dict[str, Any]:
+    """Run E1 from raw selected-layer activations and save an auditable record."""
+    activations, metadata = load_activation_shards(config.experiment1_dir)
+    traces = load_traces(config.data_path)
+    direction_path = config.experiment1_dir / "probes" / "directions.npz"
+    if not direction_path.exists():
+        raise FileNotFoundError(f"Missing frozen layer-selection artifact: {direction_path}")
+    direction = np.load(direction_path)
+    layer = int(direction["selected_layer"])
+    result = conditional_hidden_state_analysis(
+        activations,
+        metadata,
+        traces,
+        layer=layer,
+        c_values=config.c_values,
+        max_iter=config.max_iter,
+        bootstrap_samples=config.bootstrap_samples,
+        confidence_level=config.confidence_level,
+        seed=config.seed,
+        tfidf_min_df=config.conditional_tfidf_min_df,
+        tfidf_max_features=config.conditional_tfidf_max_features,
+    )
+    output = config.output_dir / "conditional_hidden_state"
+    output.mkdir(parents=True, exist_ok=True)
+    result.metrics.to_csv(output / "metrics.csv", index=False)
+    result.selection.to_csv(output / "validation_selection.csv", index=False)
+    result.predictions.to_csv(output / "test_predictions.csv", index=False)
+    result.paired_intervals.to_csv(output / "paired_differences.csv", index=False)
+    _atomic_write_text(
+        output / "feature_blocks.json", json.dumps(result.feature_blocks, indent=2)
+    )
+
+    resolved = {
+        "analysis": "E1_conditional_hidden_state",
+        "experiment1_dir": str(config.experiment1_dir),
+        "data_path": str(config.data_path),
+        "model": config.model_name,
+        "selected_layer": layer,
+        "target": "invalid_so_far",
+        "conditions": result.feature_blocks,
+        "c_values": list(config.c_values),
+        "max_iter": config.max_iter,
+        "class_weight": "balanced",
+        "training_weighting": "trace_equal",
+        "selection_metric": "validation_auroc",
+        "threshold_selection": "validation_process_f1",
+        "tfidf_min_df": config.conditional_tfidf_min_df,
+        "tfidf_max_features": config.conditional_tfidf_max_features,
+        "bootstrap_unit": "trace",
+        "bootstrap_samples": config.bootstrap_samples,
+        "confidence_level": config.confidence_level,
+        "practical_auroc_margin": config.conditional_practical_margin,
+        "seed": config.seed,
+    }
+    encoded = json.dumps(resolved, sort_keys=True, separators=(",", ":")).encode()
+    config_hash = hashlib.sha256(encoded).hexdigest()
+    resolved["sha256"] = config_hash
+    _atomic_write_text(output / "resolved_config.json", json.dumps(resolved, indent=2))
+    _atomic_write_text(
+        output / "result_record.md",
+        _conditional_result_record(
+            result.paired_intervals,
+            margin=config.conditional_practical_margin,
+            config_hash=config_hash,
+            confidence_level=config.confidence_level,
+        ),
+    )
+    summary = {
+        "status": "complete",
+        "analysis_scope": "post_hoc",
+        "selected_layer": layer,
+        "conditions": list(result.feature_blocks),
+        "test_traces": int(result.predictions["trace_id"].nunique()),
+        "practical_auroc_margin": config.conditional_practical_margin,
+        "config_sha256": config_hash,
+        "artifacts": {
+            "metrics": "metrics.csv",
+            "selection": "validation_selection.csv",
+            "predictions": "test_predictions.csv",
+            "paired_intervals": "paired_differences.csv",
+            "feature_blocks": "feature_blocks.json",
+            "result_record": "result_record.md",
+        },
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_text(output / "summary.json", json.dumps(summary, indent=2))
+    return summary
 
 
 def fit_and_save_transition_probe(config: ExtendedFollowupConfig) -> dict[str, Any]:
@@ -621,6 +713,39 @@ def _write_progress(
             indent=2,
         ),
     )
+
+
+def _conditional_result_record(
+    intervals: pd.DataFrame,
+    *,
+    margin: float,
+    config_hash: str,
+    confidence_level: float,
+) -> str:
+    """Render a claim-limited E1 record directly from paired estimates."""
+    comparison = intervals[intervals["comparison"].eq("N+H - N")].set_index("metric")
+    auroc = comparison.loc["auroc"]
+    log_loss = comparison.loc["log_loss"]
+    ranking_status = (
+        "upper interval bound is below the frozen practical margin"
+        if float(auroc["ci_high"]) < margin
+        else "interval does not rule out an increment at the frozen practical margin"
+    )
+    interval_label = f"{100 * confidence_level:g}% interval"
+    return f"""# E1 conditional hidden-state result record
+
+This record was generated from held-out, trace-paired predictions under resolved configuration
+`{config_hash}`.
+
+- N+H minus N AUROC: {float(auroc['estimate']):+.4f} ({interval_label}
+  [{float(auroc['ci_low']):+.4f}, {float(auroc['ci_high']):+.4f}]).
+- N+H minus N log loss: {float(log_loss['estimate']):+.4f} ({interval_label}
+  [{float(log_loss['ci_low']):+.4f}, {float(log_loss['ci_high']):+.4f}]); negative favors N+H.
+- Frozen practical AUROC margin: {margin:.4f}; the {ranking_status}.
+
+Interpret the ranking, proper-score, and localization rows separately. This post-hoc result does not
+by itself provide an untouched confirmatory replication.
+"""
 
 
 def _atomic_write_text(path: Path, value: str) -> None:

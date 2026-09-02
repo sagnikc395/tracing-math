@@ -35,14 +35,15 @@ Auditing Hidden-State Error Probes in Qwen2.5-Math-1.5B-Instruct}
 We audit whether hidden-state probes identify when mathematical reasoning first becomes invalid, or
 instead exploit easier correlates of an invalid prefix. In a case study of \model{} on \dataset{},
 a linear probe predicts the persistent target \emph{invalid so far} with held-out AUROC $0.866$.
-Equally tuned nuisance baselines collapse most of that margin: prefix TF--IDF reaches $0.760$,
-structural metadata $0.780$, and a joint text-plus-metadata model with final-answer correctness
+Equally tuned nuisance baselines collapse most of that margin: prefix TF--IDF reaches $0.751$,
+structural metadata $0.776$, and a joint text-plus-metadata model with final-answer correctness
 reaches $0.874$---numerically \emph{above} the hidden state (paired difference $-0.008$, 95\% CI
 $[-0.028,0.013]$). The hidden probe's remaining value is narrower and task-specific: it localizes
 the annotated onset better (Process F1 $0.393$ versus $0.294$; paired difference $0.099$
-$[0.040,0.158]$) and rejects correct traces that the joint shortcut model falsely alarms on, while
-it localizes exactly on only $28.9\%$ of erroneous traces and falsely alarms on $38.8\%$ of correct
-traces. A post-hoc, metadata-matched transition probe obtains AUROC $0.769$ on held-out pairs;
+$[0.040,0.158]$), but the oracle-assisted joint model has higher correct-trace rejection
+($0.895$ versus $0.612$). The hidden probe localizes exactly on only $28.9\%$ of erroneous traces
+and falsely alarms on $38.8\%$ of correct traces. A post-hoc, metadata-matched transition probe
+obtains AUROC $0.769$ on held-out pairs;
 matched-covariate balance diagnostics and reuse quantification keep it explicitly exploratory. Two
 verdict readouts fail their behavioral validity checks, so the intervention remains a failed pilot.
 We conclude that decodability, incremental information over tuned nuisances, localization,
@@ -219,19 +220,21 @@ The selected probe reaches AUROC $0.866$ (95\% CI $[0.849,0.884]$), average prec
 centering leaves pooled AUROC at $0.881$ ($[0.862,0.900]$), and mean per-trace AUROC is $0.968$
 ($[0.958,0.976]$). Stable trace offsets therefore do not explain all discrimination.
 
-Table~\ref{tab:controls} shows the equally tuned comparison. Prefix text reaches AUROC $0.760$,
-structural metadata $0.780$, and their joint model $0.810$: the controls' errors are partly
+Table~\ref{tab:controls} shows the equally tuned comparison. Prefix text reaches AUROC $0.751$,
+structural metadata $0.776$, and their joint model $0.810$: the controls' errors are partly
 complementary. Adding final-answer correctness yields the strongest nuisance model at AUROC
 $0.874$, numerically above the hidden probe's $0.866$ (paired hidden-minus-joint difference
 $-0.008$ $[-0.028,0.013]$, which includes zero). Under a maximally fair tuning budget, the hidden
-state shows \emph{no incremental pooled-ranking information} over the best nuisance predictor.
+hidden-only comparison does not establish whether hidden features add incremental value to the
+nuisance model; that requires the nested N versus N+H comparison described in the limitations.
 
 The decomposition matters more than the pooled number. The hidden probe retains a Process F1
-advantage of $0.099$ ($[0.040,0.158]$) and an exact-localization advantage of $0.113$
-($[0.064,0.163]$), because the joint model crosses threshold on most correct traces (correct
-rejection $0.612$ versus $0.895$; hidden-minus-joint difference $-0.283$ $[-0.347,-0.218]$). What
-the hidden state contributes is temporal specificity---when to start alarming---not better
-separation of invalid prefixes in aggregate. Within final-answer-correctness strata, the hidden
+advantage of $0.099$ ($[0.040,0.158]$) and an erroneous-trace exact-localization advantage of
+$0.113$ ($[0.064,0.163]$). This gain is offset by lower correct rejection: $0.612$ for the hidden
+probe versus $0.895$ for the oracle-assisted joint model (hidden-minus-joint difference $-0.283$
+$[-0.347,-0.218]$). On the 237 correct traces, both reject 140, only the hidden probe alarms on 72,
+only the joint model alarms on 5, and both alarm on 20. The models therefore trade erroneous-trace
+onset localization against correct-trace rejection. Within final-answer-correctness strata, the hidden
 AUROC advantage is confined to traces whose final answer is correct ($0.073$ $[0.039,0.107]$) and
 vanishes among incorrect-outcome traces ($-0.001$ $[-0.022,0.021]$), consistent with the outcome
 field carrying most pooled information when it is informative.
@@ -239,21 +242,22 @@ field carrying most pooled information when it is informative.
 \begin{table}[t]
 \centering
 \small
-\caption{Equally tuned held-out comparison. All rows use the same validation $C$ grid,
-validation threshold selection, and trace-equal training weights. Paired intervals are hidden
-minus control; positive $\Delta$ favors the hidden state.}
+\caption{Held-out comparison generated from the audited metric schema. Controls use the same
+validation $C$ grid, validation threshold selection, and trace-equal training weights; the frozen
+hidden probe retains its original boundary-equal fit. Paired intervals are hidden minus control;
+positive $\Delta$ favors the hidden state.}
 \label{tab:controls}
 \setlength{\tabcolsep}{3.5pt}
 \begin{tabular}{lrrrrl}
 \toprule
-Predictor & AUROC & Proc.\ F1 & Exact & Corr.\ rej. & $\Delta$ AUROC [95\% CI] \\
+Predictor & AUROC & Proc.\ F1 & Error exact & Corr.\ rej. & $\Delta$ AUROC [95\% CI] \\
 \midrule
 Hidden state & .866 & .393 & .289 & .612 & --- \\
-Prefix TF--IDF & .760 & .281 & .293 & .477 & .106 [.083,.132] \\
-Structural metadata & .780 & .147 & .164 & .194 & .086 [.065,.107] \\
-Joint text + metadata & .810 & .210 & .208 & .278 & .056 [.037,.073] \\
-Metadata + final outcome & .854 & .262 & .335 & .646 & .012 [$-$ .012,.036] \\
-Joint + final outcome & .874 & .294 & .430 & .895 & $-$ .008 [$-$ .028,.013] \\
+Prefix TF--IDF & .751 & .274 & .192 & .477 & .115 [.089,.142] \\
+Structural metadata & .776 & .168 & .148 & .194 & .090 [.069,.110] \\
+Joint text + metadata & .810 & .210 & .169 & .278 & .056 [.037,.073] \\
+Metadata + final outcome & .854 & .262 & .164 & .646 & .012 [$-$ .012,.036] \\
+Joint + final outcome & .874 & .294 & .176 & .895 & $-$ .008 [$-$ .028,.013] \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -328,16 +332,19 @@ or formal verification.
 The central empirical finding is a gap with a precise shape: in \model{}, invalid-so-far prefixes
 are linearly decodable, but an equally tuned joint text-plus-metadata model with final-answer
 correctness matches or exceeds the hidden state's pooled AUROC; what remains is a
-localization and correct-rejection advantage, itself weak in absolute terms.
+better erroneous-trace onset-localization score but worse correct rejection, both weak in absolute
+terms. A nested nuisance-plus-hidden analysis is required before assigning that contrast uniquely
+to the hidden representation.
 
 For discovery practice, this audit reduces to a checklist. Before treating a decodable internal
-pattern as discovered knowledge, test and report: (1) whether equally tuned nuisance models---fit
-jointly, under the same selection budget---recover the pooled performance; (2) whether any residual
+pattern as discovered knowledge, test and report: (1) whether adding hidden features to equally
+tuned nuisance models---under the same selection budget---improves held-out performance; (2) whether any residual
 advantage survives on the task-specific metrics that matter, with paired intervals; (3) whether
 temporal correspondence holds against matched and shifted controls; (4) whether calibration and
 subgroup behavior survive the shifts the use case implies; and (5) whether a behavioral readout
-distinguishes the relevant states before any causal claim. Our candidate passed (1) only in the
-negative and failed the rest in absolute terms.
+distinguishes the relevant states before any causal claim. Our candidate has not yet completed the
+nested test in (1), shows metric-specific rather than uniformly strong performance in (2)--(4), and
+fails the behavioral-readout requirement in (5).
 
 \bibliographystyle{plainnat}
 \bibliography{references}

@@ -1000,7 +1000,7 @@ def subgroup_metrics(
                     seed=seed,
                     analysis_config=analysis_config,
                 )
-                for metric in ("auroc", "process_f1", "first_error_exact"):
+                for metric in ("auroc", "process_f1", "error_exact"):
                     values = bootstrap.get(metric, pd.Series(dtype=float)).dropna()
                     if not values.empty:
                         bounds = quantile_interval(values.to_numpy(dtype=float), tail)
@@ -1115,7 +1115,9 @@ def _comparison_values(
         "auroc": binary["auroc"],
         "average_precision": binary["average_precision"],
         "process_f1": change["process_f1"],
-        "first_error_exact": change["first_error_exact"],
+        "error_exact": change["error_exact"],
+        "correct_rejection": change["correct_rejection"],
+        "complete_accuracy": change["complete_accuracy"],
     }
 
 
