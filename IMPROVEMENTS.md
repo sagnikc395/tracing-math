@@ -155,9 +155,9 @@ original dataset.
 Run:
 
 ```bash
-uv run math-error-extended-followup \
-  --config configs/experiment3.yaml \
-  run-transition-matching-sensitivity
+uv run math-error \
+  --config configs/project.yaml \
+  transition-sensitivity
 ```
 
 The command needs the activation shards, which are not present in the current local artifact

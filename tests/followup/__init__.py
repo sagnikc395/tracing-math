@@ -1,2 +1,0 @@
-"""CPU follow-up tests."""
-

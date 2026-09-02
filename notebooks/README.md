@@ -1,57 +1,66 @@
-# All experiments notebook
+# Colab workflow
 
-[`experiment.ipynb`](experiment.ipynb) is the single Colab entry point for Experiments 1--3. It
-runs, in order:
+[`experiment.ipynb`](experiment.ipynb) is the single notebook for the tracing pipeline. It uses the
+same `math-error` command and `configs/project.yaml` as local runs.
 
-1. ProcessBench download and resumable step-boundary activation extraction;
-2. Experiment A: layer-wise decoding, localization, grouped-bootstrap uncertainty, and the required
-   position, lexical, shuffled-label, embedding-state, and within-error-trace controls;
-3. Experiment B: the complete cross-domain transfer matrix; and
-4. Experiment C: a gated Yes/No verdict baseline, then the signed causal dose response and matched
-   random-orthogonal controls when baseline specificity is nonzero;
-5. the three essential paper figures;
-6. publication of the frozen result package to GitHub;
-7. Experiment 2, the CPU follow-up with temporal tests, length-aware thresholds, and paired control
-   intervals;
-8. Experiment 3's matched first-error transition probe over the original activation shards;
-9. resumable GPU extraction at natural step endings and artificial marker endings;
-10. annotation-gated counterfactual activation patching; and
-11. an optional, independently checkpointed 7B same-family replication.
+The notebook assumes that the repository is already available in the Colab runtime or on Google
+Drive. It mounts Drive for data, checkpoints, logs, and artifacts. It does not clone a repository,
+read credentials, change Git state, or contact remote services.
 
-Use **Runtime → Change runtime type → A100 GPU**, then run every cell from top to bottom. The notebook
-mounts Google Drive and writes the fixed run to:
+## Runtime
+
+Use a GPU runtime with BF16 support for the model-backed stages. The notebook uses one Drive-backed
+run root:
 
 ```text
 MyDrive/math-error-tracing/
 ├── data/processbench.jsonl
+├── data/counterfactual_pairs.jsonl
 ├── run_status.json
 ├── logs/
-└── artifacts/qwen2.5-math-1.5b-a100-bf16/
+└── artifacts/
 ```
 
-Before starting, create a fine-grained GitHub token with **Contents: read and write** permission and
-store it in Colab Secrets as `GITHUB_TOKEN`. Authentication uses a temporary `GIT_ASKPASS` script;
-the token is not embedded in the clone URL, Git remote, notebook source, or output.
+Place the repository checkout in one of these locations before running the first cell:
 
-Sections 1--7 take their scientific settings from `configs/experiment1.yaml`, which contains only the
-confirmatory L2 probe and Experiment 1 settings. Those sections change only persistence paths and
-runtime settings (BF16 and batch sizes) for the A100. Section 9 builds Experiment 2's configuration;
-Sections 10--12 use `configs/experiment3.yaml`. Both write separate artifact trees and label
-their analyses post-hoc. The 7B replication is off by default so it cannot delay the required stages.
+- the current Colab working directory;
+- `/content/tracing-mathematical-error-detection-in-language-models`;
+- `MyDrive/math-error-tracing/tracing-mathematical-error-detection-in-language-models`; or
+- `MyDrive/math-error-tracing/repository`.
 
-Activation extraction and causal interventions are resumable. Re-running the notebook reuses
-complete activation shards and intervention groups. `run_status.json`, per-stage logs,
-`extraction_progress.json`, and `interventions/progress.json` record what is running and what has
-finished. Extended stages use separate status keys and write to `artifacts/experiment3-extended`.
-The counterfactual JSONL template lives in Drive so manual verification survives a runtime reset.
-The publishing cell commits only the fixed generated configuration, essential tables,
-learned directions, intervention outputs, and these figures:
+The first cell installs the local package in editable mode. Dataset and model downloads use their
+public package identifiers from the project configuration.
 
-- `method_and_trajectory.pdf`;
-- `predictive_results.pdf`; and
-- `transfer_and_causal.pdf`.
+## Workflow
 
-A final publication cell copies compact follow-up tables and manifests. It excludes activation
-shards, checkpoint files, the counterfactual annotation template, and the downloaded dataset.
+Run cells from top to bottom. The stages are:
 
-The dataset and activation shards remain in Drive and are never published by the notebook.
+1. mount Drive and resolve runtime paths;
+2. validate the unified project configuration;
+3. download ProcessBench and extract resumable step-boundary activations;
+4. fit hidden-state probes and visible controls;
+5. run the gated verdict assay and render figures;
+6. run CPU analysis over frozen predictions;
+7. fit the conditional nuisance-plus-hidden comparison;
+8. fit the matched transition probe and write matching diagnostics;
+9. compare natural-token and marker-token boundary states;
+10. create the counterfactual annotation template; and
+11. check the compact result inventory.
+
+The CPU analysis does not load the model or activation shards. Counterfactual patching remains gated:
+reviewers must complete the correction fields and set `verified` to `true` before the patching
+command can be run. No patching result is reported by this notebook.
+
+All commands use one entry point:
+
+```bash
+python -m tracing_math --config /content/tracing_math_project.yaml validate-config
+python -m tracing_math --config /content/tracing_math_project.yaml extract-activations
+python -m tracing_math --config /content/tracing_math_project.yaml fit-probes
+python -m tracing_math --config /content/tracing_math_project.yaml analyze
+python -m tracing_math --config /content/tracing_math_project.yaml fit-conditional
+python -m tracing_math --config /content/tracing_math_project.yaml fit-transition
+```
+
+Existing shards and analysis outputs are reused by the pipeline. Status and logs are written under the
+Drive run root so a disconnected runtime can resume from the last completed stage.

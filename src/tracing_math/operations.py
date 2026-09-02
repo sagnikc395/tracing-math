@@ -1,0 +1,774 @@
+"""Resumable orchestration for optional tracing analyses."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import average_precision_score, roc_auc_score
+from tqdm.auto import tqdm
+
+from tracing_math.conditional import conditional_hidden_state_analysis
+from tracing_math.config import ProjectConfig
+from tracing_math.data import (
+    ProcessTrace,
+    assign_partitions,
+    iter_step_metadata,
+    load_traces,
+)
+from tracing_math.model import HuggingFaceMathModel, TraceTooLongError
+from tracing_math.pipeline import load_activation_shards
+from tracing_math.probes import binary_metrics
+from tracing_math.transitions import (
+    analyze_fixed_boundary_locations,
+    build_matched_transition_dataset,
+    fit_transition_probes,
+    summarize_counterfactual_patching,
+    transition_matching_diagnostics,
+)
+
+BOUNDARY_LOCATIONS = ("step_content", "marker")
+PATCH_CONDITIONS = (
+    "correct_baseline",
+    "error_baseline",
+    "error_state_into_correct",
+    "correct_state_into_error",
+)
+
+
+def fit_and_save_conditional_hidden_state(
+    config: ProjectConfig,
+) -> dict[str, Any]:
+    """Run the conditional hidden-state analysis and save an auditable record."""
+    activations, metadata = load_activation_shards(config.extraction.output_dir)
+    traces = load_traces(config.data.output_path)
+    direction_path = config.extraction.output_dir / "probes" / "directions.npz"
+    if not direction_path.exists():
+        raise FileNotFoundError(f"Missing frozen layer-selection artifact: {direction_path}")
+    direction = np.load(direction_path)
+    layer = int(direction["selected_layer"])
+    result = conditional_hidden_state_analysis(
+        activations,
+        metadata,
+        traces,
+        layer=layer,
+        c_values=config.analysis.control_c_values,
+        max_iter=config.analysis.transition_max_iter,
+        bootstrap_samples=config.analysis.transition_bootstrap_samples,
+        confidence_level=config.analysis.confidence_level,
+        seed=config.seed,
+        tfidf_min_df=config.analysis.conditional_tfidf_min_df,
+        tfidf_max_features=config.analysis.conditional_tfidf_max_features,
+    )
+    output = config.artifacts.analysis_dir / "conditional_hidden_state"
+    output.mkdir(parents=True, exist_ok=True)
+    result.metrics.to_csv(output / "metrics.csv", index=False)
+    result.selection.to_csv(output / "validation_selection.csv", index=False)
+    result.predictions.to_csv(output / "test_predictions.csv", index=False)
+    result.paired_intervals.to_csv(output / "paired_differences.csv", index=False)
+    _atomic_write_text(
+        output / "feature_blocks.json", json.dumps(result.feature_blocks, indent=2)
+    )
+
+    resolved = {
+        "analysis": "conditional_hidden_state",
+        "artifact_dir": str(config.extraction.output_dir),
+        "data_path": str(config.data.output_path),
+        "model": config.model.name,
+        "selected_layer": layer,
+        "target": "invalid_so_far",
+        "conditions": result.feature_blocks,
+        "c_values": list(config.analysis.control_c_values),
+        "max_iter": config.analysis.transition_max_iter,
+        "class_weight": "balanced",
+        "training_weighting": "trace_equal",
+        "selection_metric": "validation_auroc",
+        "threshold_selection": "validation_process_f1",
+        "tfidf_min_df": config.analysis.conditional_tfidf_min_df,
+        "tfidf_max_features": config.analysis.conditional_tfidf_max_features,
+        "bootstrap_unit": "trace",
+        "bootstrap_samples": config.analysis.transition_bootstrap_samples,
+        "confidence_level": config.analysis.confidence_level,
+        "practical_auroc_margin": config.analysis.conditional_practical_margin,
+        "seed": config.seed,
+    }
+    encoded = json.dumps(resolved, sort_keys=True, separators=(",", ":")).encode()
+    config_hash = hashlib.sha256(encoded).hexdigest()
+    resolved["sha256"] = config_hash
+    _atomic_write_text(output / "resolved_config.json", json.dumps(resolved, indent=2))
+    _atomic_write_text(
+        output / "result_record.md",
+        _conditional_result_record(
+            result.paired_intervals,
+            margin=config.analysis.conditional_practical_margin,
+            config_hash=config_hash,
+            confidence_level=config.analysis.confidence_level,
+        ),
+    )
+    summary = {
+        "status": "complete",
+        "analysis_scope": "analysis",
+        "selected_layer": layer,
+        "conditions": list(result.feature_blocks),
+        "test_traces": int(result.predictions["trace_id"].nunique()),
+        "practical_auroc_margin": config.analysis.conditional_practical_margin,
+        "config_sha256": config_hash,
+        "artifacts": {
+            "metrics": "metrics.csv",
+            "selection": "validation_selection.csv",
+            "predictions": "test_predictions.csv",
+            "paired_intervals": "paired_differences.csv",
+            "feature_blocks": "feature_blocks.json",
+            "result_record": "result_record.md",
+        },
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_text(output / "summary.json", json.dumps(summary, indent=2))
+    return summary
+
+
+def fit_and_save_transition_probe(config: ProjectConfig) -> dict[str, Any]:
+    activations, metadata = load_activation_shards(config.extraction.output_dir)
+    transitions, transition_metadata = build_matched_transition_dataset(
+        activations, metadata
+    )
+    result = fit_transition_probes(
+        transitions,
+        transition_metadata,
+        c_values=config.analysis.control_c_values,
+        max_iter=config.analysis.transition_max_iter,
+        bootstrap_samples=config.analysis.transition_bootstrap_samples,
+        confidence_level=config.analysis.confidence_level,
+        seed=config.seed,
+    )
+    output = config.artifacts.analysis_dir / "transition_probe"
+    output.mkdir(parents=True, exist_ok=True)
+    result["metrics"].to_csv(output / "layer_metrics.csv", index=False)
+    result["predictions"].to_csv(output / "test_predictions.csv", index=False)
+    result["controls"].to_csv(output / "controls.csv", index=False)
+    result["bootstrap"].to_csv(output / "bootstrap_summary.csv", index=False)
+    transition_metadata.to_csv(output / "matched_transitions.csv", index=False)
+    diagnostics = transition_matching_diagnostics(transition_metadata)
+    diagnostics.to_csv(output / "matching_diagnostics.csv", index=False)
+    np.savez(
+        output / "direction.npz",
+        direction=result["direction"],
+        selected_layer=result["selected_layer"],
+        selected_c=result["selected_c"],
+    )
+    summary = {
+        "status": "complete",
+        "analysis_scope": "analysis",
+        "selected_layer": result["selected_layer"],
+        "selected_c": result["selected_c"],
+        "test_pairs": int(result["predictions"]["pair_id"].nunique()),
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_text(output / "summary.json", json.dumps(summary, indent=2))
+    return summary
+
+
+def analyze_transition_matching(config: ProjectConfig) -> dict[str, Any]:
+    """Compute reuse and balance diagnostics without activation shards."""
+    path = config.artifacts.analysis_dir / "transition_probe" / "matched_transitions.csv"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No matched transitions found at {path}; run fit-transition first"
+        )
+    metadata = pd.read_csv(path)
+    diagnostics = transition_matching_diagnostics(metadata)
+    output = config.artifacts.analysis_dir / "transition_probe"
+    diagnostics.to_csv(output / "matching_diagnostics.csv", index=False)
+    return {
+        "status": "complete",
+        "analysis_scope": "analysis",
+        "diagnostics": {
+            row["diagnostic"]: float(row["value"])
+            for row in diagnostics.to_dict(orient="records")
+        },
+        "updated_at": _utc_now(),
+    }
+
+
+def run_transition_matching_sensitivity(config: ProjectConfig) -> dict[str, Any]:
+    """Refit the frozen transition protocol under alternative matching rules.
+
+    Requires activation shards, so this shares the GPU/storage prerequisites of
+    the original transition run. The default-with-reuse result must come from
+    the frozen protocol; one-to-one matching and inverse-reuse weighting are
+    reported only as sensitivity analyses.
+    """
+    activations, metadata = load_activation_shards(config.extraction.output_dir)
+    output = config.artifacts.analysis_dir / "transition_probe"
+    output.mkdir(parents=True, exist_ok=True)
+    variants: dict[str, dict[str, Any]] = {}
+    for name, one_to_one, inverse_reuse in (
+        ("with_reuse", False, False),
+        ("inverse_reuse_weights", False, True),
+        ("one_to_one", True, False),
+    ):
+        transitions, transition_metadata = build_matched_transition_dataset(
+            activations,
+            metadata,
+            one_to_one=one_to_one,
+            rng_seed=config.seed,
+        )
+        result = fit_transition_probes(
+            transitions,
+            transition_metadata,
+            c_values=config.analysis.control_c_values,
+            max_iter=config.analysis.transition_max_iter,
+            bootstrap_samples=config.analysis.transition_bootstrap_samples,
+            confidence_level=config.analysis.confidence_level,
+            seed=config.seed,
+            inverse_reuse=inverse_reuse,
+        )
+        test = result["predictions"]
+        variants[name] = {
+            "pairs": int(test["pair_id"].nunique()),
+            "selected_layer": int(result["selected_layer"]),
+            "selected_c": float(result["selected_c"]),
+            "auroc": float(
+                roc_auc_score(test["label"].to_numpy(), test["score"].to_numpy())
+            ),
+            "average_precision": float(
+                average_precision_score(test["label"].to_numpy(), test["score"].to_numpy())
+            ),
+            "unique_placebo_traces": int(
+                transition_metadata.loc[
+                    transition_metadata["role"].eq("correct_placebo"), "trace_id"
+                ].nunique()
+            ),
+        }
+    frame = pd.DataFrame(
+        [
+            {"variant": name, **values}
+            for name, values in variants.items()
+        ]
+    )
+    frame.to_csv(output / "matching_sensitivity.csv", index=False)
+    return {
+        "status": "complete",
+        "analysis_scope": "analysis",
+        "variants": variants,
+        "updated_at": _utc_now(),
+    }
+
+
+def extract_boundary_control_shards(config: ProjectConfig) -> dict[str, int]:
+    traces = load_traces(config.data.output_path)
+    partitions = assign_partitions(
+        traces, seed=config.seed, train_fraction=0.6, validation_fraction=0.2
+    )
+    output = config.artifacts.analysis_dir / "boundary_control"
+    shard_dir = output / "shards"
+    shard_dir.mkdir(parents=True, exist_ok=True)
+    _check_boundary_identity(config, output)
+    model = HuggingFaceMathModel(
+        config.model.name,
+        device=config.model.device,
+        dtype=config.model.dtype,
+        max_length=config.model.max_length,
+    )
+    totals = {"traces": len(traces), "extracted": 0, "skipped_long": 0, "cached": 0}
+    shard_size = config.analysis.boundary_save_every
+    for start in tqdm(range(0, len(traces), shard_size), desc="boundary-control shards"):
+        end = min(start + shard_size, len(traces))
+        stem = f"shard_{start:05d}_{end - 1:05d}"
+        array_path = shard_dir / f"{stem}.npy"
+        metadata_path = shard_dir / f"{stem}.csv"
+        manifest_path = shard_dir / f"{stem}.json"
+        if all(path.exists() for path in (array_path, metadata_path, manifest_path)):
+            manifest = json.loads(manifest_path.read_text())
+            totals["cached"] += int(manifest["extracted"])
+            totals["skipped_long"] += int(manifest["skipped_long"])
+            _write_progress(output, totals, start, end, len(traces))
+            continue
+
+        arrays: list[np.ndarray] = []
+        rows: list[dict[str, object]] = []
+        skipped = []
+        shard_traces = traces[start:end]
+        for batch_start in range(0, len(shard_traces), config.analysis.boundary_batch_size):
+            batch = shard_traces[
+                batch_start : batch_start + config.analysis.boundary_batch_size
+            ]
+            try:
+                results = model.extract_traces_at_locations(batch)
+                retained = batch
+            except TraceTooLongError:
+                results = []
+                retained = []
+                for trace in batch:
+                    try:
+                        results.extend(model.extract_traces_at_locations([trace]))
+                        retained.append(trace)
+                    except TraceTooLongError as error:
+                        skipped.append({"trace_id": trace.trace_id, "reason": str(error)})
+            for trace, result in zip(retained, results, strict=True):
+                arrays.append(
+                    np.stack([result.values[name] for name in BOUNDARY_LOCATIONS], axis=1)
+                )
+                rows.extend(
+                    iter_step_metadata(
+                        trace, partitions[trace.trace_id], token_count=result.token_count
+                    )
+                )
+        if not arrays:
+            raise RuntimeError(f"No extractable traces in {stem}")
+        values = np.concatenate(arrays)
+        frame = pd.DataFrame(rows)
+        if len(values) != len(frame):
+            raise RuntimeError(f"Boundary activation/metadata mismatch in {stem}")
+        _atomic_save_array(array_path, values)
+        _atomic_save_csv(metadata_path, frame)
+        _atomic_write_text(
+            manifest_path,
+            json.dumps(
+                {
+                    "attempted": end - start,
+                    "extracted": len(arrays),
+                    "skipped_long": len(skipped),
+                    "skipped": skipped,
+                    "activation_rows": len(values),
+                    "locations": list(BOUNDARY_LOCATIONS),
+                },
+                indent=2,
+            ),
+        )
+        totals["extracted"] += len(arrays)
+        totals["skipped_long"] += len(skipped)
+        _write_progress(output, totals, start, end, len(traces))
+    return totals
+
+
+def analyze_boundary_controls(config: ProjectConfig) -> dict[str, Any]:
+    activations, metadata = load_boundary_control_shards(config.artifacts.analysis_dir)
+    direction_artifact = np.load(config.extraction.output_dir / "probes" / "directions.npz")
+    layer = int(direction_artifact["selected_layer"])
+    c_value = float(direction_artifact["c_values"][layer])
+    metrics, predictions, comparison = analyze_fixed_boundary_locations(
+        activations,
+        metadata,
+        BOUNDARY_LOCATIONS,
+        layer=layer,
+        c_value=c_value,
+        max_iter=config.analysis.transition_max_iter,
+        bootstrap_samples=config.analysis.transition_bootstrap_samples,
+        confidence_level=config.analysis.confidence_level,
+        seed=config.seed,
+    )
+    output = config.artifacts.analysis_dir / "boundary_control"
+    metrics.to_csv(output / "metrics.csv", index=False)
+    predictions.to_csv(output / "test_predictions.csv", index=False)
+    comparison.to_csv(output / "paired_differences.csv", index=False)
+    summary = {
+        "status": "complete",
+        "analysis_scope": "analysis",
+        "fixed_layer": layer,
+        "fixed_c": c_value,
+        "locations": list(BOUNDARY_LOCATIONS),
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_text(output / "summary.json", json.dumps(summary, indent=2))
+    return summary
+
+
+def load_boundary_control_shards(output_dir: Path) -> tuple[np.ndarray, pd.DataFrame]:
+    shard_dir = output_dir / "boundary_control" / "shards"
+    array_paths = sorted(shard_dir.glob("shard_*.npy"))
+    if not array_paths:
+        raise FileNotFoundError(f"No boundary-control shards found under {shard_dir}")
+    arrays = []
+    frames = []
+    expected_tail = None
+    for array_path in array_paths:
+        metadata_path = array_path.with_suffix(".csv")
+        manifest_path = array_path.with_suffix(".json")
+        if not metadata_path.exists() or not manifest_path.exists():
+            raise FileNotFoundError(f"Incomplete boundary-control shard {array_path.stem}")
+        manifest = json.loads(manifest_path.read_text())
+        if tuple(manifest["locations"]) != BOUNDARY_LOCATIONS:
+            raise ValueError(f"Unexpected boundary locations in {manifest_path}")
+        array = np.load(array_path, mmap_mode="r")
+        frame = pd.read_csv(metadata_path)
+        if len(array) != len(frame):
+            raise ValueError(f"Row mismatch between {array_path} and {metadata_path}")
+        if expected_tail is None:
+            expected_tail = array.shape[1:]
+        elif array.shape[1:] != expected_tail:
+            raise ValueError("Boundary-control shards have inconsistent dimensions")
+        arrays.append(np.asarray(array))
+        frames.append(frame)
+    return np.concatenate(arrays), pd.concat(frames, ignore_index=True)
+
+
+def prepare_counterfactual_template(
+    config: ProjectConfig, *, force: bool = False
+) -> Path:
+    output = config.artifacts.counterfactual_pairs_path
+    if output.exists() and not force:
+        return output
+    traces = [trace for trace in load_traces(config.data.output_path) if trace.has_error]
+    ordered = sorted(
+        traces,
+        key=lambda trace: hashlib.sha256(
+            f"{config.seed}:{trace.source}:{trace.trace_id}".encode()
+        ).digest(),
+    )[: config.analysis.counterfactual_template_size]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8") as handle:
+        for trace in ordered:
+            handle.write(
+                json.dumps(
+                    {
+                        "pair_id": trace.trace_id,
+                        "source": trace.source,
+                        "problem": trace.problem,
+                        "prefix_steps": list(trace.steps[: trace.label]),
+                        "error_step": trace.steps[trace.label],
+                        "corrected_step": "",
+                        "verified": False,
+                        "annotation_notes": "",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    temporary.replace(output)
+    return output
+
+
+def run_counterfactual_patching(config: ProjectConfig) -> dict[str, Any]:
+    pairs = _load_counterfactual_pairs(config.artifacts.counterfactual_pairs_path)
+    artifact = np.load(config.extraction.output_dir / "probes" / "directions.npz")
+    layer = int(artifact["selected_intervention_layer"])
+    model = HuggingFaceMathModel(
+        config.model.name,
+        device=config.model.device,
+        dtype=config.model.dtype,
+        max_length=config.model.max_length,
+    )
+    output = config.artifacts.analysis_dir / "counterfactual_patching"
+    output.mkdir(parents=True, exist_ok=True)
+    _check_counterfactual_identity(config, pairs, layer, output)
+    kwargs = {"correct_answer": " No", "incorrect_answer": " Yes"}
+    baseline_path = output / "baseline.checkpoint.csv"
+    baseline_rows = (
+        pd.read_csv(baseline_path).to_dict(orient="records")
+        if baseline_path.exists()
+        else []
+    )
+    baseline_completed = (
+        set(pd.DataFrame(baseline_rows)["pair_id"].astype(str)) if baseline_rows else set()
+    )
+    baseline_pending = [pair for pair in pairs if pair["pair_id"] not in baseline_completed]
+    for start in tqdm(
+        range(0, len(baseline_pending), config.analysis.patching_batch_size),
+        desc="counterfactual baseline",
+    ):
+        chunk = baseline_pending[start : start + config.analysis.patching_batch_size]
+        correct_traces = [_pair_trace(pair, correct=True) for pair in chunk]
+        error_traces = [_pair_trace(pair, correct=False) for pair in chunk]
+        correct_requests = [(trace, len(trace.steps) - 1) for trace in correct_traces]
+        error_requests = [(trace, len(trace.steps) - 1) for trace in error_traces]
+        correct_scores = model.verdict_scores(
+            correct_requests, batch_size=config.analysis.patching_batch_size, **kwargs
+        )
+        error_scores = model.verdict_scores(
+            error_requests, batch_size=config.analysis.patching_batch_size, **kwargs
+        )
+        for index, pair in enumerate(chunk):
+            baseline_rows.extend(
+                [
+                    {
+                        "pair_id": pair["pair_id"],
+                        "source": pair["source"],
+                        "layer": layer,
+                        "condition": "correct_baseline",
+                        "verdict_score": float(correct_scores[index]),
+                    },
+                    {
+                        "pair_id": pair["pair_id"],
+                        "source": pair["source"],
+                        "layer": layer,
+                        "condition": "error_baseline",
+                        "verdict_score": float(error_scores[index]),
+                    },
+                ]
+            )
+        _atomic_save_csv(baseline_path, pd.DataFrame(baseline_rows))
+
+    baseline = pd.DataFrame(baseline_rows)
+    baseline_labels = baseline["condition"].eq("error_baseline").to_numpy(dtype=int)
+    baseline_probabilities = (baseline["verdict_score"].to_numpy(dtype=float) + 1) / 2
+    baseline_metrics = binary_metrics(baseline_labels, baseline_probabilities)
+    baseline_metrics["n_pairs"] = len(pairs)
+    baseline_metrics["gate_passed"] = bool(
+        baseline_metrics["specificity"] > 0 and baseline_metrics["auroc"] > 0.5
+    )
+    _atomic_write_text(
+        output / "baseline_metrics.json", json.dumps(baseline_metrics, indent=2)
+    )
+    if not baseline_metrics["gate_passed"]:
+        baseline.to_csv(output / "individual.csv", index=False)
+        pd.DataFrame(
+            columns=["effect", "estimate", "ci_low", "ci_high", "n_pairs"]
+        ).to_csv(output / "summary.csv", index=False)
+        status = {
+            "status": "stopped_after_baseline",
+            "reason": "counterfactual verdict did not pass AUROC and specificity gates",
+            "analysis_scope": "analysis",
+            "layer": layer,
+            "pairs_completed": len(pairs),
+            "updated_at": _utc_now(),
+        }
+        _atomic_write_text(output / "progress.json", json.dumps(status, indent=2))
+        return status
+
+    checkpoint_path = output / "individual.checkpoint.csv"
+    patch_rows = (
+        pd.read_csv(checkpoint_path).to_dict(orient="records")
+        if checkpoint_path.exists()
+        else []
+    )
+    completed = set(pd.DataFrame(patch_rows)["pair_id"].astype(str)) if patch_rows else set()
+    pending = [pair for pair in pairs if pair["pair_id"] not in completed]
+    for start in tqdm(
+        range(0, len(pending), config.analysis.patching_batch_size), desc="counterfactual patches"
+    ):
+        chunk = pending[start : start + config.analysis.patching_batch_size]
+        correct_traces = [_pair_trace(pair, correct=True) for pair in chunk]
+        error_traces = [_pair_trace(pair, correct=False) for pair in chunk]
+        correct_requests = [(trace, len(trace.steps) - 1) for trace in correct_traces]
+        error_requests = [(trace, len(trace.steps) - 1) for trace in error_traces]
+        correct_states = model.boundary_input_states(
+            correct_requests, layer=layer, batch_size=config.analysis.patching_batch_size
+        )
+        error_states = model.boundary_input_states(
+            error_requests, layer=layer, batch_size=config.analysis.patching_batch_size
+        )
+        error_into_correct = model.verdict_scores(
+            correct_requests,
+            layer=layer,
+            replacement_states=error_states,
+            batch_size=config.analysis.patching_batch_size,
+            **kwargs,
+        )
+        correct_into_error = model.verdict_scores(
+            error_requests,
+            layer=layer,
+            replacement_states=correct_states,
+            batch_size=config.analysis.patching_batch_size,
+            **kwargs,
+        )
+        for index, pair in enumerate(chunk):
+            patch_rows.extend(
+                {
+                    "pair_id": pair["pair_id"],
+                    "source": pair["source"],
+                    "layer": layer,
+                    "condition": condition,
+                    "verdict_score": float(score),
+                }
+                for condition, score in (
+                    ("error_state_into_correct", error_into_correct[index]),
+                    ("correct_state_into_error", correct_into_error[index]),
+                )
+            )
+        _atomic_save_csv(checkpoint_path, pd.DataFrame(patch_rows))
+        _atomic_write_text(
+            output / "progress.json",
+            json.dumps(
+                {
+                    "status": "running",
+                    "pairs_completed": len(completed) + start + len(chunk),
+                    "pairs_total": len(pairs),
+                    "updated_at": _utc_now(),
+                },
+                indent=2,
+            ),
+        )
+    individual = pd.concat([baseline, pd.DataFrame(patch_rows)], ignore_index=True)
+    if set(individual["condition"]) != set(PATCH_CONDITIONS):
+        raise RuntimeError("Counterfactual patching did not produce all required conditions")
+    individual.to_csv(output / "individual.csv", index=False)
+    summary = summarize_counterfactual_patching(
+        individual,
+        samples=config.analysis.transition_bootstrap_samples,
+        confidence_level=config.analysis.confidence_level,
+        seed=config.seed,
+    )
+    summary.to_csv(output / "summary.csv", index=False)
+    status = {
+        "status": "complete",
+        "analysis_scope": "analysis",
+        "layer": layer,
+        "pairs_completed": len(pairs),
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_text(output / "progress.json", json.dumps(status, indent=2))
+    return status
+
+
+def _pair_trace(pair: dict[str, Any], *, correct: bool) -> ProcessTrace:
+    step = pair["corrected_step"] if correct else pair["error_step"]
+    steps = (*pair["prefix_steps"], step)
+    return ProcessTrace(
+        trace_id=f"{pair['pair_id']}:{'correct' if correct else 'error'}",
+        source=str(pair["source"]),
+        generator="counterfactual",
+        problem=str(pair["problem"]),
+        steps=tuple(map(str, steps)),
+        label=-1 if correct else len(steps) - 1,
+        final_answer_correct=correct,
+    )
+
+
+def _load_counterfactual_pairs(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Create and annotate {path} with run prepare-counterfactuals first"
+        )
+    with path.open(encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle if line.strip()]
+    verified = []
+    for row in rows:
+        if not row.get("verified"):
+            continue
+        required = {"pair_id", "source", "problem", "prefix_steps", "error_step", "corrected_step"}
+        if missing := required.difference(row):
+            raise ValueError(f"Counterfactual row is missing fields: {sorted(missing)}")
+        if not str(row["corrected_step"]).strip():
+            raise ValueError(f"Verified pair {row['pair_id']} has no corrected step")
+        if str(row["corrected_step"]).strip() == str(row["error_step"]).strip():
+            raise ValueError(f"Pair {row['pair_id']} has identical corrected and error steps")
+        verified.append(row)
+    if not verified:
+        raise ValueError("No verified counterfactual pairs are available for patching")
+    ids = [str(row["pair_id"]) for row in verified]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Counterfactual pair ids must be unique")
+    return verified
+
+
+def _check_boundary_identity(config: ProjectConfig, output: Path) -> None:
+    identity = {
+        "dataset_sha256": hashlib.sha256(config.data.output_path.read_bytes()).hexdigest(),
+        "model": config.model.name,
+        "dtype": config.model.dtype,
+        "max_length": config.model.max_length,
+        "locations": list(BOUNDARY_LOCATIONS),
+    }
+    path = output / "extraction_identity.json"
+    if path.exists() and json.loads(path.read_text()) != identity:
+        raise ValueError("Boundary-control output contains shards from a different run")
+    _atomic_write_text(path, json.dumps(identity, indent=2))
+
+
+def _check_counterfactual_identity(
+    config: ProjectConfig,
+    pairs: list[dict[str, Any]],
+    layer: int,
+    output: Path,
+) -> None:
+    pair_bytes = json.dumps(pairs, sort_keys=True, ensure_ascii=False).encode()
+    identity = {
+        "pairs_sha256": hashlib.sha256(pair_bytes).hexdigest(),
+        "model": config.model.name,
+        "dtype": config.model.dtype,
+        "max_length": config.model.max_length,
+        "layer": layer,
+    }
+    path = output / "identity.json"
+    if path.exists() and json.loads(path.read_text()) != identity:
+        raise ValueError(
+            "Counterfactual pairs or model settings changed after checkpointing; "
+            "use a new output directory"
+        )
+    _atomic_write_text(path, json.dumps(identity, indent=2))
+
+
+def _write_progress(
+    output: Path, totals: dict[str, int], start: int, end: int, trace_count: int
+) -> None:
+    completed = totals["cached"] + totals["extracted"] + totals["skipped_long"]
+    _atomic_write_text(
+        output / "progress.json",
+        json.dumps(
+            {
+                "status": "complete" if end >= trace_count else "running",
+                "last_shard": {"start": start, "end_exclusive": end},
+                "traces_total": trace_count,
+                "traces_completed": completed,
+                **totals,
+                "updated_at": _utc_now(),
+            },
+            indent=2,
+        ),
+    )
+
+
+def _conditional_result_record(
+    intervals: pd.DataFrame,
+    *,
+    margin: float,
+    config_hash: str,
+    confidence_level: float,
+) -> str:
+    """Render a claim-limited result record from paired estimates."""
+    comparison = intervals[intervals["comparison"].eq("N+H - N")].set_index("metric")
+    auroc = comparison.loc["auroc"]
+    log_loss = comparison.loc["log_loss"]
+    ranking_status = (
+        "upper interval bound is below the frozen practical margin"
+        if float(auroc["ci_high"]) < margin
+        else "interval does not rule out an increment at the frozen practical margin"
+    )
+    interval_label = f"{100 * confidence_level:g}% interval"
+    return f"""# Conditional hidden-state result record
+
+This record was generated from held-out, trace-paired predictions under resolved configuration
+`{config_hash}`.
+
+- N+H minus N AUROC: {float(auroc['estimate']):+.4f} ({interval_label}
+  [{float(auroc['ci_low']):+.4f}, {float(auroc['ci_high']):+.4f}]).
+- N+H minus N log loss: {float(log_loss['estimate']):+.4f} ({interval_label}
+  [{float(log_loss['ci_low']):+.4f}, {float(log_loss['ci_high']):+.4f}]); negative favors N+H.
+- Frozen practical AUROC margin: {margin:.4f}; the {ranking_status}.
+
+Interpret the ranking, proper-score, and localization rows separately. This post-hoc result does not
+by itself provide an untouched confirmatory replication.
+"""
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(value, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _atomic_save_csv(path: Path, frame: pd.DataFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    frame.to_csv(temporary, index=False)
+    temporary.replace(path)
+
+
+def _atomic_save_array(path: Path, values: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("wb") as handle:
+        np.save(handle, values)
+    temporary.replace(path)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()

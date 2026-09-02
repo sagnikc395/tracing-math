@@ -31,9 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-math-error-tracing = "tracing_math.experiment1.cli:main"
-math-error-cpu-followup = "tracing_math.followup.cli:main"
-math-error-extended-followup = "tracing_math.experiment3.cli:main"
+math-error = "tracing_math.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tracing_math"]

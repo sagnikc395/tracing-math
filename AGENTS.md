@@ -2,9 +2,9 @@
 
 ## Project structure and module organization
 
-The installable Python package lives in `src/tracing_math/`. Experiment 1 code belongs under `experiment1/`: use `data.py` for ProcessBench I/O and prompts, `model.py` for the Hugging Face adapter, `probes.py` for predictive analysis, `interventions.py` for causal tests, and `pipeline.py` for orchestration and artifact I/O. The post-hoc CPU analysis belongs under `followup/`. Declare commands and options with Click in each area's `cli.py`; keep scientific work in the pipeline and analysis modules. Tests mirror these packages under `tests/experiment1/` and `tests/followup/`.
+The installable Python package lives in `src/tracing_math/`. Keep it capability-oriented: `data.py` handles ProcessBench I/O and prompts, `model.py` owns the Hugging Face adapter, `probes.py` handles predictive analysis, `interventions.py` handles causal assays, `pipeline.py` owns core orchestration, `analysis.py` owns CPU diagnostics, and `operations.py` owns optional activation-backed analyses. `cli.py` is the only command surface; keep scientific work out of CLI declarations. Tests live directly under `tests/` and use the same neutral capability names.
 
-Scientific settings belong in `configs/`. The CPU follow-up uses `experiment2_cpu.yaml` and reads frozen Experiment 1 outputs. Notebooks contain the A100/Google Drive workflow, `results/` holds written findings, and `paper/` contains the LaTeX manuscript and figures. Generated datasets, activation shards, and run outputs belong in `data/processed/` or `artifacts/`, not Git.
+Scientific and runtime settings belong in `configs/project.yaml`. The unified CLI reads frozen predictions or activation artifacts according to the selected command. Notebooks contain the A100/Google Drive workflow, `results/` holds written findings, and `paper/` contains the LaTeX manuscript and figures. Generated datasets, activation shards, and run outputs belong in `data/processed/` or `artifacts/`, not Git.
 
 ## Build, test, and development commands
 
@@ -19,10 +19,10 @@ uv run ruff check src tests
 The first command creates the development environment; the others run the full test suite and lint maintained Python code. Validate configuration before costly model runs:
 
 ```bash
-uv run math-error-tracing --config configs/experiment1.yaml validate-config
+uv run math-error --config configs/project.yaml validate-config
 ```
 
-The Experiment 1 CLI also provides `run-all`, but a full run requires model downloads, substantial storage, and suitable GPU memory. The CPU follow-up runs with `uv run math-error-cpu-followup --config configs/experiment2.yaml`; it does not load the model or activation shards.
+The unified CLI also provides `run-all`, but a full run requires model downloads, substantial storage, and suitable GPU memory. The `analyze` command reads frozen prediction artifacts and does not load the model or activation shards.
 
 ## Coding style and naming conventions
 
