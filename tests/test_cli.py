@@ -15,6 +15,7 @@ def test_help_lists_pipeline_stages() -> None:
     assert "run-interventions" in result.output
     assert "fit-conditional" in result.output
     assert "run-counterfactuals" in result.output
+    assert "fit-contextual-baseline" in result.output
     assert "run-all" in result.output
 
 
@@ -37,9 +38,7 @@ def test_missing_config_reports_click_error() -> None:
 def test_fit_probes_rejects_invalid_worker_count() -> None:
     config = Path("configs/project.yaml").resolve()
 
-    result = CliRunner().invoke(
-        main, ["--config", str(config), "fit-probes", "--workers", "0"]
-    )
+    result = CliRunner().invoke(main, ["--config", str(config), "fit-probes", "--workers", "0"])
 
     assert result.exit_code == 2
     assert "must be positive or -1" in result.output

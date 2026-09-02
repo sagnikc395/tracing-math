@@ -6,14 +6,20 @@ The paper has improved. The nested comparison (E1) now shows that hidden states 
 predictive information beyond tuned nuisances on the inspected split. The metric audit (E0) is
 resolved. The self-monitoring language (E7) is fixed. The prose avoids significance inflation.
 
-The paper still needs two things to reach accept level:
+The paper can be completed without counterfactual activation patching. That analysis requires
+human verification of mathematical corrections, and no automated check can establish that a drafted
+correction is valid. Do not bypass that gate or report a patching result.
 
-1. a contextual semantic baseline to show the gain is not just bag-of-words limitations;
-2. a frozen replication or outer-fold evaluation to show the nested gain survives an untouched
-   protocol.
+The remaining evidence gaps are optional strengthening work, not blockers for closing the current
+paper:
 
-The repository contains most supporting work. Finish the two P0 items below, run the transition
-sensitivity if shards become available, and keep every claim tied to the experiment that tests it.
+1. a contextual semantic baseline to test whether the gain is more than a TF-IDF limitation;
+2. a frozen replication or outer-fold evaluation to test whether the nested gain survives an
+   untouched protocol.
+
+The repository contains the completed primary run and several post-hoc diagnostics. Close the paper
+by labeling the remaining analyses accurately, freezing the supported claim, and running the paper
+checks. The story must follow the evidence already collected.
 
 The target should be a paper that can defend this sentence:
 
@@ -51,6 +57,11 @@ Two implemented analyses remain unexecuted:
 
 - `run-transition-matching-sensitivity` is implemented but needs activation shards;
 - calibration was claimed in the original paper but is not tested in the revised version.
+
+Counterfactual activation patching is a separate optional analysis. It is intentionally closed as
+unrun because its drafted corrections are not human-verified. The template and drafts may remain in
+`data/processed/` as an audit trail, but they must not be counted as results or used to block the
+paper.
 
 ## Priority order
 
@@ -191,6 +202,30 @@ If the authors want to keep a calibration-related analysis, pick one definition:
 If space is tight, leave calibration out. The existing threshold-transfer result is already reported
 in the source-transfer section.
 
+## Counterfactual patching decision
+
+**Decision: close this loop without running patching.** The 160-pair template is a draft annotation
+resource, not an experiment result. The 135 proposed corrections have not been established as
+mathematically valid, and the 25 withheld items were intentionally not assigned local corrections.
+There is no defensible route to a causal patching claim without a reviewer who can verify the
+corrections.
+
+For paper completion:
+
+1. Keep the template and drafts archived as unrun exploratory material.
+2. State in the methods or limitations that counterfactual patching was not run because corrections
+   were not independently verified.
+3. Remove patching from the required evidence list, abstract, conclusion, and definition of done.
+4. Do not run `run-counterfactuals`, mark rows as `verified`, or infer a causal result from the
+   template.
+5. Report the completed learned-direction assay only as an inconclusive test of a weak verdict
+   readout, as described in the experiment record.
+
+This is a scope decision, not a failed attempt to manufacture a result. The paper's supported claim
+is predictive and diagnostic: hidden states contain partially transferable information about
+`invalid_so_far` under the tested setup. It is not a claim that the model uses that information
+causally.
+
 ## Work that should not consume the next cycle
 
 - Do not add more weak metadata baselines. The missing comparison is conditional, not another
@@ -198,21 +233,32 @@ in the source-transfer section.
 - Do not increase bootstrap draws on the inspected test split and call the result confirmatory.
 - Do not run more random intervention directions. They cannot replace a positive control for assay
   sensitivity.
-- Do not run counterfactual patching until corrections are human-verified and the unmodified readout
-  separates valid and invalid prefixes.
+- Do not run counterfactual patching for this paper. It is closed as optional and unrun unless a
+  future project supplies independent mathematical verification.
 - Do not test many contextual encoders and report the best one.
 - Do not add a third model before E2 and E3 are done.
 - Do not hide a positive N+H result because the intended paper is a negative-results paper.
 
 ## Recommended execution sequence
 
-1. Run E3 (contextual text baseline) -- moderate cost, high decision value.
+The minimum path to close the current paper is:
+
+1. Keep counterfactual patching marked optional and unrun; do not wait for human verification.
+2. Update the manuscript and result record so the supported claim is predictive/diagnostic and the
+   causal assay is inconclusive because its verdict readout was weak.
+3. Remove any remaining calibration, self-monitoring, precise-localization, or causal-use wording.
+4. Freeze the artifact map, resolved configurations, exclusion counts, and environment record.
+5. Build the paper and run the repository test, lint, and clean-environment checks.
+6. Record any contextual baseline, replication, transition sensitivity, or split sensitivity as
+   optional follow-up work unless it is actually completed and integrated.
+
+The higher-evidence path remains available when time and compute permit:
+
+1. Run E3 (contextual text baseline).
 2. Freeze the complete E1+E3 protocol as the E2 manifest.
 3. Run E2 (confirmatory replication) once and lock its predictions.
 4. Run E5 (transition sensitivity) if activation shards become available.
 5. Run E4 (split sensitivity) to characterize variability across seeds.
-6. Rewrite the abstract, conclusion, and evidence-status table after the experiment ledger is
-   complete.
 
 ## Definition of done
 
@@ -224,17 +270,22 @@ The experimental package is ready for the paper when all of the following are tr
 - [x] All compared models use documented and matched training weights and selection budgets.
 - [x] Reader-model and self-monitoring claims are not mixed.
 - [x] The causal section makes no use claim while the behavioral readout remains invalid.
-- [ ] One contextual text-only baseline tests the surviving hidden-specific localization claim.
+- [ ] One contextual text-only baseline tests the surviving hidden-specific localization claim
+  (optional strengthening; not required to close this version).
 - [ ] A frozen confirmatory model or dataset has been evaluated once, or the entire central audit is
-  labeled exploratory.
-- [ ] Split sensitivity is reported without selecting a favorable seed.
-- [ ] Transition matching sensitivity has been run and includes pair counts and uncertainty.
-- [ ] Calibration is defined and measured, or the term is removed from all manuscript versions.
-- [ ] No in-sample fitted score is used as a meta-model training feature.
-- [ ] Resolved configs, data/model identities, selection records, predictions, metrics, and intervals
-  are saved for every new experiment.
+  labeled exploratory (optional strengthening; the current audit is labeled exploratory where
+  appropriate).
+- [ ] Split sensitivity is reported without selecting a favorable seed (optional strengthening).
+- [ ] Transition matching sensitivity has been run and includes pair counts and uncertainty (optional
+  strengthening).
+- [x] Calibration claims are removed unless a defined calibration analysis is completed.
+- [x] Counterfactual patching is explicitly marked optional and unrun; no unverified correction is
+  presented as an experimental result.
+- [x] No in-sample fitted score is used as a meta-model training feature.
+- [x] Resolved configs, data/model identities, selection records, predictions, metrics, and intervals
+  are saved for the completed experiments.
 - [ ] `uv run pytest`, `uv run ruff check src tests`, the paper build, and a clean-environment
-  reproduction check pass.
+  reproduction check pass before submission.
 
 ## Result record to fill after each run
 

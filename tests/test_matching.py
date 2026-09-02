@@ -163,6 +163,7 @@ def test_transition_probe_accepts_inverse_reuse_weights() -> None:
 
     assert result["selected_layer"] in {0, 1}
     assert len(result["predictions"]) == 2
+    assert set(result["bootstrap"]["bootstrap_scheme"]) == {"two_way_pair_and_placebo_trace"}
 
 
 def test_matching_diagnostics_reject_missing_columns() -> None:

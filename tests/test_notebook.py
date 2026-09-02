@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 NOTEBOOK_PATH = Path("notebooks/experiment.ipynb")
+CONTEXTUAL_NOTEBOOK_PATH = Path("notebooks/contextual_baseline_colab.ipynb")
 
 
 def _notebook_source() -> str:
@@ -60,3 +61,22 @@ def test_notebook_json_is_valid() -> None:
     assert notebook["nbformat"] == 4
     assert notebook["cells"]
     assert all(cell["cell_type"] in {"code", "markdown", "raw"} for cell in notebook["cells"])
+
+
+def test_contextual_notebook_has_private_clone_and_narrow_result_push() -> None:
+    notebook = json.loads(CONTEXTUAL_NOTEBOOK_PATH.read_text())
+    source = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+
+    for required in (
+        "GITHUB_TOKEN",
+        "HF_TOKEN",
+        '"git", "clone"',
+        "fit-contextual-baseline",
+        "PUSH_RESULTS = False",
+        '"git", "push"',
+        "results",
+    ):
+        assert required in source
+    for forbidden in ("git add -A", "git add ."):
+        assert forbidden not in source
+    assert notebook["nbformat"] == 4

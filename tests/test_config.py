@@ -35,6 +35,7 @@ def test_config_uses_safe_defaults_when_optional_sections_are_missing(tmp_path: 
     config = ProjectConfig.from_yaml(path)
     assert [family.name for family in config.probe.families] == ["l2"]
     assert config.analysis.calibration_bins == 10
+    assert config.analysis.contextual_encoder_name == "sentence-transformers/all-MiniLM-L6-v2"
 
 
 @pytest.mark.parametrize("workers", [0, -2])

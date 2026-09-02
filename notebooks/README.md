@@ -3,6 +3,12 @@
 [`experiment.ipynb`](experiment.ipynb) is the single notebook for the tracing pipeline. It uses the
 same `math-error` command and `configs/project.yaml` as local runs.
 
+[`contextual_baseline_colab.ipynb`](contextual_baseline_colab.ipynb) is the separate E3 workflow. It
+clones `github.com/sagnikc395/tracing-math` with a `GITHUB_TOKEN`, authenticates model downloads with
+an `HF_TOKEN`, runs `fit-contextual-baseline`, and can push only its generated Markdown result record.
+Add both tokens as Colab secrets and grant the notebook access. It never stages data, activation
+shards, embeddings, or other Drive artifacts.
+
 The notebook assumes that the repository is already available in the Colab runtime or on Google
 Drive. It mounts Drive for data, checkpoints, logs, and artifacts. It does not clone a repository,
 read credentials, change Git state, or contact remote services.

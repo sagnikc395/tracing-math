@@ -723,6 +723,9 @@ def _transition_bootstrap(
             "estimate": list(point.values()),
             "ci_low": [float(draw_frame[name].quantile(tail)) for name in point],
             "ci_high": [float(draw_frame[name].quantile(1 - tail)) for name in point],
+            "confidence_level": confidence_level,
+            "bootstrap_samples": samples,
+            "bootstrap_scheme": "two_way_pair_and_placebo_trace",
         }
     )
 

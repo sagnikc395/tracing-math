@@ -7,6 +7,7 @@ from tracing_math.conditional import (
     CONDITIONS,
     conditional_hidden_state_analysis,
 )
+from tracing_math.contextual import fit_contextual_text_baseline
 from tracing_math.data import ProcessTrace
 
 
@@ -90,3 +91,21 @@ def test_conditional_analysis_fits_all_conditions_and_pairs_test_rows() -> None:
         "complete_accuracy",
     }.issubset(set(result.paired_intervals["metric"]))
     assert result.metrics.set_index("condition").loc["H", "auroc"] > 0.9
+
+
+def test_contextual_baseline_uses_only_precomputed_visible_prefix_embeddings() -> None:
+    activations, metadata, traces = _conditional_fixture()
+    embeddings = activations[:, 0, :]
+
+    result = fit_contextual_text_baseline(
+        embeddings,
+        metadata,
+        traces,
+        c_values=(0.1, 1.0),
+        max_iter=500,
+        seed=42,
+    )
+
+    assert result.metrics.loc[0, "condition"] == "contextual_text"
+    assert result.selection["selected"].sum() == 1
+    assert result.predictions["condition"].eq("contextual_text").all()

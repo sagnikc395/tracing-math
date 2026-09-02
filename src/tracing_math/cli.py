@@ -16,6 +16,7 @@ from tracing_math.operations import (
     analyze_transition_matching,
     extract_boundary_control_shards,
     fit_and_save_conditional_hidden_state,
+    fit_and_save_contextual_baseline,
     fit_and_save_transition_probe,
     prepare_counterfactual_template,
     run_counterfactual_patching,
@@ -138,6 +139,13 @@ def analyze(config: ProjectConfig) -> None:
 def fit_conditional(config: ProjectConfig) -> None:
     """Fit the conditional hidden-state comparison."""
     click.echo(json.dumps(fit_and_save_conditional_hidden_state(config), indent=2))
+
+
+@main.command("fit-contextual-baseline")
+@click.pass_obj
+def fit_contextual_baseline(config: ProjectConfig) -> None:
+    """Fit the frozen visible-text contextual baseline."""
+    click.echo(json.dumps(fit_and_save_contextual_baseline(config), indent=2))
 
 
 @main.command("fit-transition")

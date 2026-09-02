@@ -10,11 +10,15 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import average_precision_score, roc_auc_score
 from tqdm.auto import tqdm
 
 from tracing_math.conditional import conditional_hidden_state_analysis
 from tracing_math.config import ProjectConfig
+from tracing_math.contextual import (
+    attach_prefix_text,
+    contextual_prefix_embeddings,
+    fit_contextual_text_baseline,
+)
 from tracing_math.data import (
     ProcessTrace,
     assign_partitions,
@@ -22,7 +26,7 @@ from tracing_math.data import (
     load_traces,
 )
 from tracing_math.model import HuggingFaceMathModel, TraceTooLongError
-from tracing_math.pipeline import load_activation_shards
+from tracing_math.pipeline import load_activation_metadata, load_activation_shards
 from tracing_math.probes import binary_metrics
 from tracing_math.transitions import (
     analyze_fixed_boundary_locations,
@@ -71,9 +75,7 @@ def fit_and_save_conditional_hidden_state(
     result.selection.to_csv(output / "validation_selection.csv", index=False)
     result.predictions.to_csv(output / "test_predictions.csv", index=False)
     result.paired_intervals.to_csv(output / "paired_differences.csv", index=False)
-    _atomic_write_text(
-        output / "feature_blocks.json", json.dumps(result.feature_blocks, indent=2)
-    )
+    _atomic_write_text(output / "feature_blocks.json", json.dumps(result.feature_blocks, indent=2))
 
     resolved = {
         "analysis": "conditional_hidden_state",
@@ -132,11 +134,70 @@ def fit_and_save_conditional_hidden_state(
     return summary
 
 
+def fit_and_save_contextual_baseline(config: ProjectConfig) -> dict[str, Any]:
+    """Encode visible prefixes with the frozen E3 encoder and fit its linear head."""
+    metadata = load_activation_metadata(
+        config.extraction.output_dir, workers=config.analysis.workers
+    )
+    traces = load_traces(config.data.output_path)
+    frame = attach_prefix_text(metadata, traces)
+    embeddings = contextual_prefix_embeddings(
+        frame["prefix_text"].tolist(),
+        model_name=config.analysis.contextual_encoder_name,
+        revision=config.analysis.contextual_encoder_revision,
+        batch_size=config.analysis.contextual_batch_size,
+        max_length=config.analysis.contextual_max_length,
+    )
+    result = fit_contextual_text_baseline(
+        embeddings,
+        metadata,
+        traces,
+        c_values=config.analysis.control_c_values,
+        max_iter=config.analysis.transition_max_iter,
+        seed=config.seed,
+    )
+    output = config.artifacts.analysis_dir / "contextual_text_baseline"
+    output.mkdir(parents=True, exist_ok=True)
+    result.metrics.to_csv(output / "metrics.csv", index=False)
+    result.selection.to_csv(output / "validation_selection.csv", index=False)
+    result.predictions.to_csv(output / "test_predictions.csv", index=False)
+    np.save(output / "prefix_embeddings.npy", embeddings)
+    resolved = {
+        "analysis": "contextual_text_baseline",
+        "encoder": config.analysis.contextual_encoder_name,
+        "revision": config.analysis.contextual_encoder_revision,
+        "input": "problem and prefix through the current boundary only",
+        "excluded_inputs": ["future_steps", "final_answer_correct", "target_model_hidden_states"],
+        "c_values": list(config.analysis.control_c_values),
+        "training_weighting": "trace_equal",
+        "selection_metric": "validation_auroc",
+        "threshold_selection": "validation_process_f1",
+        "seed": config.seed,
+    }
+    encoded = json.dumps(resolved, sort_keys=True, separators=(",", ":")).encode()
+    resolved["sha256"] = hashlib.sha256(encoded).hexdigest()
+    _atomic_write_text(output / "resolved_config.json", json.dumps(resolved, indent=2))
+    summary = {
+        "status": "complete",
+        "analysis_scope": "analysis",
+        "encoder": config.analysis.contextual_encoder_name,
+        "test_traces": int(result.predictions["trace_id"].nunique()),
+        "artifacts": {
+            "metrics": "metrics.csv",
+            "selection": "validation_selection.csv",
+            "predictions": "test_predictions.csv",
+            "embeddings": "prefix_embeddings.npy",
+            "resolved_config": "resolved_config.json",
+        },
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_text(output / "summary.json", json.dumps(summary, indent=2))
+    return summary
+
+
 def fit_and_save_transition_probe(config: ProjectConfig) -> dict[str, Any]:
     activations, metadata = load_activation_shards(config.extraction.output_dir)
-    transitions, transition_metadata = build_matched_transition_dataset(
-        activations, metadata
-    )
+    transitions, transition_metadata = build_matched_transition_dataset(activations, metadata)
     result = fit_transition_probes(
         transitions,
         transition_metadata,
@@ -177,9 +238,7 @@ def analyze_transition_matching(config: ProjectConfig) -> dict[str, Any]:
     """Compute reuse and balance diagnostics without activation shards."""
     path = config.artifacts.analysis_dir / "transition_probe" / "matched_transitions.csv"
     if not path.exists():
-        raise FileNotFoundError(
-            f"No matched transitions found at {path}; run fit-transition first"
-        )
+        raise FileNotFoundError(f"No matched transitions found at {path}; run fit-transition first")
     metadata = pd.read_csv(path)
     diagnostics = transition_matching_diagnostics(metadata)
     output = config.artifacts.analysis_dir / "transition_probe"
@@ -188,8 +247,7 @@ def analyze_transition_matching(config: ProjectConfig) -> dict[str, Any]:
         "status": "complete",
         "analysis_scope": "analysis",
         "diagnostics": {
-            row["diagnostic"]: float(row["value"])
-            for row in diagnostics.to_dict(orient="records")
+            row["diagnostic"]: float(row["value"]) for row in diagnostics.to_dict(orient="records")
         },
         "updated_at": _utc_now(),
     }
@@ -207,6 +265,8 @@ def run_transition_matching_sensitivity(config: ProjectConfig) -> dict[str, Any]
     output = config.artifacts.analysis_dir / "transition_probe"
     output.mkdir(parents=True, exist_ok=True)
     variants: dict[str, dict[str, Any]] = {}
+    bootstrap_frames: list[pd.DataFrame] = []
+    diagnostic_frames: list[pd.DataFrame] = []
     for name, one_to_one, inverse_reuse in (
         ("with_reuse", False, False),
         ("inverse_reuse_weights", False, True),
@@ -229,33 +289,49 @@ def run_transition_matching_sensitivity(config: ProjectConfig) -> dict[str, Any]
             inverse_reuse=inverse_reuse,
         )
         test = result["predictions"]
+        bootstrap = result["bootstrap"].copy()
+        bootstrap.insert(0, "variant", name)
+        bootstrap_frames.append(bootstrap)
+        diagnostics = transition_matching_diagnostics(transition_metadata)
+        diagnostics.insert(0, "variant", name)
+        diagnostic_frames.append(diagnostics)
+        intervals = bootstrap.set_index("metric")
         variants[name] = {
             "pairs": int(test["pair_id"].nunique()),
             "selected_layer": int(result["selected_layer"]),
             "selected_c": float(result["selected_c"]),
-            "auroc": float(
-                roc_auc_score(test["label"].to_numpy(), test["score"].to_numpy())
-            ),
-            "average_precision": float(
-                average_precision_score(test["label"].to_numpy(), test["score"].to_numpy())
-            ),
+            "auroc": float(intervals.loc["auroc", "estimate"]),
+            "auroc_ci_low": float(intervals.loc["auroc", "ci_low"]),
+            "auroc_ci_high": float(intervals.loc["auroc", "ci_high"]),
+            "average_precision": float(intervals.loc["average_precision", "estimate"]),
+            "average_precision_ci_low": float(intervals.loc["average_precision", "ci_low"]),
+            "average_precision_ci_high": float(intervals.loc["average_precision", "ci_high"]),
+            "paired_accuracy": float(intervals.loc["paired_accuracy", "estimate"]),
+            "paired_accuracy_ci_low": float(intervals.loc["paired_accuracy", "ci_low"]),
+            "paired_accuracy_ci_high": float(intervals.loc["paired_accuracy", "ci_high"]),
             "unique_placebo_traces": int(
                 transition_metadata.loc[
                     transition_metadata["role"].eq("correct_placebo"), "trace_id"
                 ].nunique()
             ),
         }
-    frame = pd.DataFrame(
-        [
-            {"variant": name, **values}
-            for name, values in variants.items()
-        ]
-    )
+    frame = pd.DataFrame([{"variant": name, **values} for name, values in variants.items()])
     frame.to_csv(output / "matching_sensitivity.csv", index=False)
+    pd.concat(bootstrap_frames, ignore_index=True).to_csv(
+        output / "matching_sensitivity_bootstrap.csv", index=False
+    )
+    pd.concat(diagnostic_frames, ignore_index=True).to_csv(
+        output / "matching_sensitivity_diagnostics.csv", index=False
+    )
     return {
         "status": "complete",
         "analysis_scope": "analysis",
         "variants": variants,
+        "artifacts": {
+            "summary": "matching_sensitivity.csv",
+            "intervals": "matching_sensitivity_bootstrap.csv",
+            "matching_diagnostics": "matching_sensitivity_diagnostics.csv",
+        },
         "updated_at": _utc_now(),
     }
 
@@ -295,9 +371,7 @@ def extract_boundary_control_shards(config: ProjectConfig) -> dict[str, int]:
         skipped = []
         shard_traces = traces[start:end]
         for batch_start in range(0, len(shard_traces), config.analysis.boundary_batch_size):
-            batch = shard_traces[
-                batch_start : batch_start + config.analysis.boundary_batch_size
-            ]
+            batch = shard_traces[batch_start : batch_start + config.analysis.boundary_batch_size]
             try:
                 results = model.extract_traces_at_locations(batch)
                 retained = batch
@@ -408,9 +482,7 @@ def load_boundary_control_shards(output_dir: Path) -> tuple[np.ndarray, pd.DataF
     return np.concatenate(arrays), pd.concat(frames, ignore_index=True)
 
 
-def prepare_counterfactual_template(
-    config: ProjectConfig, *, force: bool = False
-) -> Path:
+def prepare_counterfactual_template(config: ProjectConfig, *, force: bool = False) -> Path:
     output = config.artifacts.counterfactual_pairs_path
     if output.exists() and not force:
         return output
@@ -461,9 +533,7 @@ def run_counterfactual_patching(config: ProjectConfig) -> dict[str, Any]:
     kwargs = {"correct_answer": " No", "incorrect_answer": " Yes"}
     baseline_path = output / "baseline.checkpoint.csv"
     baseline_rows = (
-        pd.read_csv(baseline_path).to_dict(orient="records")
-        if baseline_path.exists()
-        else []
+        pd.read_csv(baseline_path).to_dict(orient="records") if baseline_path.exists() else []
     )
     baseline_completed = (
         set(pd.DataFrame(baseline_rows)["pair_id"].astype(str)) if baseline_rows else set()
@@ -513,14 +583,12 @@ def run_counterfactual_patching(config: ProjectConfig) -> dict[str, Any]:
     baseline_metrics["gate_passed"] = bool(
         baseline_metrics["specificity"] > 0 and baseline_metrics["auroc"] > 0.5
     )
-    _atomic_write_text(
-        output / "baseline_metrics.json", json.dumps(baseline_metrics, indent=2)
-    )
+    _atomic_write_text(output / "baseline_metrics.json", json.dumps(baseline_metrics, indent=2))
     if not baseline_metrics["gate_passed"]:
         baseline.to_csv(output / "individual.csv", index=False)
-        pd.DataFrame(
-            columns=["effect", "estimate", "ci_low", "ci_high", "n_pairs"]
-        ).to_csv(output / "summary.csv", index=False)
+        pd.DataFrame(columns=["effect", "estimate", "ci_low", "ci_high", "n_pairs"]).to_csv(
+            output / "summary.csv", index=False
+        )
         status = {
             "status": "stopped_after_baseline",
             "reason": "counterfactual verdict did not pass AUROC and specificity gates",
@@ -534,9 +602,7 @@ def run_counterfactual_patching(config: ProjectConfig) -> dict[str, Any]:
 
     checkpoint_path = output / "individual.checkpoint.csv"
     patch_rows = (
-        pd.read_csv(checkpoint_path).to_dict(orient="records")
-        if checkpoint_path.exists()
-        else []
+        pd.read_csv(checkpoint_path).to_dict(orient="records") if checkpoint_path.exists() else []
     )
     completed = set(pd.DataFrame(patch_rows)["pair_id"].astype(str)) if patch_rows else set()
     pending = [pair for pair in pairs if pair["pair_id"] not in completed]
@@ -737,10 +803,10 @@ def _conditional_result_record(
 This record was generated from held-out, trace-paired predictions under resolved configuration
 `{config_hash}`.
 
-- N+H minus N AUROC: {float(auroc['estimate']):+.4f} ({interval_label}
-  [{float(auroc['ci_low']):+.4f}, {float(auroc['ci_high']):+.4f}]).
-- N+H minus N log loss: {float(log_loss['estimate']):+.4f} ({interval_label}
-  [{float(log_loss['ci_low']):+.4f}, {float(log_loss['ci_high']):+.4f}]); negative favors N+H.
+- N+H minus N AUROC: {float(auroc["estimate"]):+.4f} ({interval_label}
+  [{float(auroc["ci_low"]):+.4f}, {float(auroc["ci_high"]):+.4f}]).
+- N+H minus N log loss: {float(log_loss["estimate"]):+.4f} ({interval_label}
+  [{float(log_loss["ci_low"]):+.4f}, {float(log_loss["ci_high"]):+.4f}]); negative favors N+H.
 - Frozen practical AUROC margin: {margin:.4f}; the {ranking_status}.
 
 Interpret the ranking, proper-score, and localization rows separately. This post-hoc result does not

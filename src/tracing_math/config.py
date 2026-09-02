@@ -81,6 +81,10 @@ class AnalysisConfig:
     conditional_practical_margin: float = 0.02
     conditional_tfidf_min_df: int = 2
     conditional_tfidf_max_features: int = 20_000
+    contextual_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    contextual_encoder_revision: str | None = None
+    contextual_batch_size: int = 16
+    contextual_max_length: int = 512
     transition_bootstrap_samples: int = 1_000
     transition_max_iter: int = 2_000
     boundary_save_every: int = 100
@@ -218,17 +222,24 @@ class ProjectConfig:
             raise ValueError("analysis.transition_bootstrap_samples must be positive")
         if self.analysis.transition_max_iter < 1:
             raise ValueError("analysis.transition_max_iter must be positive")
-        if min(
-            self.analysis.conditional_tfidf_min_df,
-            self.analysis.conditional_tfidf_max_features,
-            self.analysis.boundary_save_every,
-            self.analysis.boundary_batch_size,
-            self.analysis.patching_batch_size,
-            self.analysis.counterfactual_template_size,
-        ) < 1:
+        if (
+            min(
+                self.analysis.conditional_tfidf_min_df,
+                self.analysis.conditional_tfidf_max_features,
+                self.analysis.boundary_save_every,
+                self.analysis.boundary_batch_size,
+                self.analysis.patching_batch_size,
+                self.analysis.counterfactual_template_size,
+                self.analysis.contextual_batch_size,
+                self.analysis.contextual_max_length,
+            )
+            < 1
+        ):
             raise ValueError("analysis batch, shard, and template sizes must be positive")
         if not 0 <= self.analysis.conditional_practical_margin <= 1:
             raise ValueError("analysis.conditional_practical_margin must be in [0, 1]")
+        if not self.analysis.contextual_encoder_name.strip():
+            raise ValueError("analysis.contextual_encoder_name cannot be empty")
 
 
 def _build_config(raw: dict[str, Any]) -> ProjectConfig:
@@ -321,6 +332,16 @@ def _build_config(raw: dict[str, Any]) -> ProjectConfig:
             conditional_tfidf_max_features=int(
                 analysis.get("conditional_tfidf_max_features", 20_000)
             ),
+            contextual_encoder_name=str(
+                analysis.get("contextual_encoder_name", "sentence-transformers/all-MiniLM-L6-v2")
+            ),
+            contextual_encoder_revision=(
+                None
+                if analysis.get("contextual_encoder_revision") is None
+                else str(analysis["contextual_encoder_revision"])
+            ),
+            contextual_batch_size=int(analysis.get("contextual_batch_size", 16)),
+            contextual_max_length=int(analysis.get("contextual_max_length", 512)),
             transition_bootstrap_samples=int(analysis.get("transition_bootstrap_samples", 1_000)),
             transition_max_iter=int(analysis.get("transition_max_iter", 2_000)),
             boundary_save_every=int(analysis.get("boundary_save_every", 100)),
