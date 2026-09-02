@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import platform
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy
+import sklearn
 import yaml
 from scipy.stats import norm
 from sklearn.compose import ColumnTransformer
@@ -31,6 +35,9 @@ from tracing_math.localization import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+CONTROL_C_GRID: tuple[float, ...] = (0.01, 0.1, 1.0, 10.0)
+"""Regularization grid shared with the hidden-state probe's validation selection."""
 
 
 @dataclass(frozen=True)
@@ -106,12 +113,13 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         length_results.to_csv(output / "length_aware_threshold_results.csv", index=False)
         availability["length_aware_thresholding"] = "complete"
 
-        LOGGER.info("Running prefix-text and metadata-only shortcut controls")
+        LOGGER.info("Running tuned prefix-text, metadata, and joint shortcut controls")
         shortcut_controls, shortcut_predictions = shortcut_control_analysis(
             fit_predictions,
             predictions,
             source_traces,
             seed=config.seed,
+            c_grid=config.control_c_values,
         )
         shortcut_controls.to_csv(output / "shortcut_controls.csv", index=False)
         shortcut_predictions.to_csv(output / "shortcut_control_predictions.csv", index=False)
@@ -167,6 +175,34 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         )
         paired_controls.to_csv(output / "probe_control_paired_intervals.csv", index=False)
         availability["probe_control_paired_intervals"] = "complete"
+
+        LOGGER.info(
+            "Running outcome-stratified probe-control intervals (%d draws)",
+            config.bootstrap_samples,
+        )
+        outcome_intervals = stratified_probe_control_intervals(
+            predictions,
+            control_predictions,
+            stratum_column="final_answer_correct",
+            probe_threshold=threshold,
+            samples=config.bootstrap_samples,
+            seed=config.seed,
+            confidence_level=config.confidence_level,
+        )
+        outcome_intervals.to_csv(
+            output / "probe_control_intervals_by_final_answer.csv", index=False
+        )
+        source_intervals = stratified_probe_control_intervals(
+            predictions,
+            control_predictions,
+            stratum_column="source",
+            probe_threshold=threshold,
+            samples=config.bootstrap_samples,
+            seed=config.seed,
+            confidence_level=config.confidence_level,
+        )
+        source_intervals.to_csv(output / "probe_control_intervals_by_source.csv", index=False)
+        availability["probe_control_intervals_by_stratum"] = "complete"
     else:
         paired_controls = pd.DataFrame()
         availability["probe_control_paired_intervals"] = (
@@ -174,6 +210,10 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
             "cannot be paired"
         )
     (output / "analysis_availability.json").write_text(json.dumps(availability, indent=2))
+
+    LOGGER.info("Auditing onset-task eligibility (step-0 exclusions)")
+    onset_audit = onset_eligibility_audit(traces)
+    onset_audit.to_csv(output / "onset_eligibility_audit.csv", index=False)
 
     LOGGER.info("Running subgroup intervals (%d draws)", config.bootstrap_samples)
     subgroups = subgroup_outcomes(
@@ -204,6 +244,7 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
     _plot_followup(trajectory, permutation_draws, permutation_summary, output)
 
     summary = _build_summary(
+        environment=_environment_metadata(),
         predictions=predictions,
         threshold=threshold,
         permutation=permutation_summary,
@@ -220,9 +261,64 @@ def run_followup(config: FollowupConfig) -> dict[str, Any]:
         config=config,
     )
     (output / "summary.json").write_text(json.dumps(summary, indent=2))
-    (output / "results.md").write_text(_results_markdown(summary, placebo, centered, sensitivity))
+    (output / "results.md").write_text(
+        _results_markdown(summary, placebo, centered, sensitivity)
+    )
     LOGGER.info("CPU follow-up complete: %s", output)
     return summary
+
+
+def _trace_equal_train_weights(frame: pd.DataFrame, mask: np.ndarray) -> np.ndarray:
+    """Inverse boundary-count weights giving every trace equal total training loss."""
+    codes = pd.factorize(frame.loc[mask, "trace_id"], sort=False)[0]
+    counts = np.bincount(codes).astype(float)
+    return 1.0 / counts[codes]
+
+
+def _select_control_c(
+    make_model,
+    train_features,
+    train_labels: np.ndarray,
+    validation_features,
+    validation_labels: np.ndarray,
+    *,
+    c_grid: tuple[float, ...],
+    sample_weight: np.ndarray | None = None,
+) -> float:
+    """Pick C by validation AUROC using the hidden probe's grid and tie-breaking."""
+    candidates = []
+    for c_value in c_grid:
+        model = make_model(c_value)
+        _fit_with_weight(model, train_features, train_labels, sample_weight)
+        scores = model.predict_proba(validation_features)[:, 1]
+        auroc = float(roc_auc_score(validation_labels, scores))
+        candidates.append((auroc, -abs(float(np.log10(c_value))), c_value))
+    return float(max(candidates, key=lambda item: item[:2])[2])
+
+
+def _fit_with_weight(model, features, labels: np.ndarray, weight: np.ndarray | None) -> None:
+    """Fit a bare estimator or a pipeline, routing sample weights to the final step."""
+    if weight is None:
+        model.fit(features, labels)
+    elif hasattr(model, "steps"):
+        final_step = model.steps[-1][0]
+        model.fit(features, labels, **{f"{final_step}__sample_weight": weight})
+    else:
+        model.fit(features, labels, sample_weight=weight)
+
+
+def _fit_final_control(
+    make_model,
+    c_value: float,
+    fit_features,
+    fit_labels: np.ndarray,
+    *,
+    sample_weight: np.ndarray | None,
+):
+    """Refit one control on train plus validation, mirroring the hidden probe."""
+    model = make_model(c_value)
+    _fit_with_weight(model, fit_features, fit_labels, sample_weight)
+    return model
 
 
 def shortcut_control_analysis(
@@ -232,8 +328,18 @@ def shortcut_control_analysis(
     *,
     seed: int,
     max_iter: int = 2_000,
+    c_grid: tuple[float, ...] = CONTROL_C_GRID,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fit prefix-text and trace-metadata controls without using test labels for tuning."""
+    """Fit tuned prefix-text, metadata, and joint controls without test labels.
+
+    Every control receives the same model-selection budget as the hidden-state
+    probe: L2 regularization is chosen from ``c_grid`` by validation AUROC, the
+    threshold is chosen on the same validation scores, and the selected model is
+    refit on train plus validation. Each control is fit with inverse
+    boundary-count sample weights so every trace contributes equal training
+    loss, addressing the boundary-weighted-training asymmetry of the primary
+    probe.
+    """
     required = {
         "trace_id",
         "source",
@@ -261,65 +367,140 @@ def shortcut_control_analysis(
     test = _attach_prefix_text(test_predictions.assign(partition="test"), traces)
     train = fit["partition"].eq("train").to_numpy()
     validation = fit["partition"].eq("validation").to_numpy()
+    fit_mask = train | validation
     labels = fit["label"].to_numpy(dtype=int)
     test_labels = test["label"].to_numpy(dtype=int)
     if any(np.unique(labels[mask]).size < 2 for mask in (train, validation)):
         raise ValueError("Train and validation shortcut-control splits need both classes")
 
+    def tuned(c_value: float):
+        return LogisticRegression(
+            C=c_value,
+            class_weight="balanced",
+            max_iter=max_iter,
+            solver="liblinear",
+            random_state=seed,
+        )
+
     rows: list[dict[str, object]] = []
     prediction_rows: list[pd.DataFrame] = []
+
+    def evaluate(
+        name: str,
+        make_model,
+        train_features,
+        validation_features,
+        test_features,
+        fit_features,
+        fit_weight: np.ndarray | None,
+    ) -> None:
+        c_value = _select_control_c(
+            make_model,
+            train_features,
+            labels[train],
+            validation_features,
+            labels[validation],
+            c_grid=c_grid,
+            sample_weight=_trace_equal_train_weights(fit, train),
+        )
+        selection_model = _fit_final_control(
+            make_model,
+            c_value,
+            train_features,
+            labels[train],
+            sample_weight=_trace_equal_train_weights(fit, train),
+        )
+        validation_scores = selection_model.predict_proba(validation_features)[:, 1]
+        threshold = choose_threshold(fit.loc[validation], validation_scores)
+        final_model = _fit_final_control(
+            make_model, c_value, fit_features, labels[fit_mask], sample_weight=fit_weight
+        )
+        scores = final_model.predict_proba(test_features)[:, 1]
+        row, control_predictions = _shortcut_control_outputs(
+            name, test, test_labels, scores, threshold, c_value=c_value
+        )
+        rows.append(row)
+        prediction_rows.append(control_predictions)
+
+    fit_weights = _trace_equal_train_weights(fit, fit_mask)
 
     vectorizer = TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=20_000)
     x_train = vectorizer.fit_transform(fit.loc[train, "prefix_text"])
     x_validation = vectorizer.transform(fit.loc[validation, "prefix_text"])
+    x_fit = vectorizer.transform(fit.loc[fit_mask, "prefix_text"])
     x_test = vectorizer.transform(test["prefix_text"])
-    lexical = LogisticRegression(
-        C=1.0,
-        class_weight="balanced",
-        max_iter=max_iter,
-        solver="liblinear",
-        random_state=seed,
-    ).fit(x_train, labels[train])
-    validation_scores = lexical.predict_proba(x_validation)[:, 1]
-    threshold = choose_threshold(fit.loc[validation], validation_scores)
-    scores = lexical.predict_proba(x_test)[:, 1]
-    row, control_predictions = _shortcut_control_outputs(
-        "prefix TF-IDF", test, test_labels, scores, threshold
+    evaluate(
+        "prefix TF-IDF",
+        tuned,
+        x_train,
+        x_validation,
+        x_test,
+        x_fit,
+        fit_weights,
     )
-    rows.append(row)
-    prediction_rows.append(control_predictions)
 
     numeric = ["step_index", "step_fraction", "n_steps", "token_count"]
     categorical = ["source", "generator"]
-    for name, numeric_features in (
-        ("structural metadata", numeric),
-        ("metadata plus final outcome", [*numeric, "final_answer_correct"]),
+    for name, include_outcome in (
+        ("structural metadata", False),
+        ("metadata plus final outcome", True),
     ):
-        metadata_model = make_pipeline(
-            ColumnTransformer(
-                [
-                    ("numeric", StandardScaler(), numeric_features),
-                    ("categorical", OneHotEncoder(handle_unknown="ignore"), categorical),
-                ]
-            ),
-            LogisticRegression(
-                C=1.0,
-                class_weight="balanced",
-                max_iter=max_iter,
-                solver="liblinear",
-                random_state=seed,
-            ),
+        numeric_features = [*numeric, "final_answer_correct"] if include_outcome else numeric
+        features = [*numeric_features, *categorical]
+
+        def make_metadata(c_value: float, numeric_features=numeric_features):
+            return make_pipeline(
+                ColumnTransformer(
+                    [
+                        ("numeric", StandardScaler(), numeric_features),
+                        ("categorical", OneHotEncoder(handle_unknown="ignore"), categorical),
+                    ]
+                ),
+                tuned(c_value),
+            )
+
+        evaluate(
+            name,
+            make_metadata,
+            fit.loc[train, features],
+            fit.loc[validation, features],
+            test[features],
+            fit.loc[fit_mask, features],
+            fit_weights,
         )
-        features = numeric_features + categorical
-        metadata_model.fit(fit.loc[train, features], labels[train])
-        validation_scores = metadata_model.predict_proba(fit.loc[validation, features])[:, 1]
-        threshold = choose_threshold(fit.loc[validation], validation_scores)
-        scores = metadata_model.predict_proba(test[features])[:, 1]
-        row, control_predictions = _shortcut_control_outputs(
-            name, test, test_labels, scores, threshold
+
+    for name, include_outcome in (
+        ("joint text + metadata", False),
+        ("joint text + metadata + outcome", True),
+    ):
+        numeric_features = [*numeric, "final_answer_correct"] if include_outcome else numeric
+        features = [*numeric_features, *categorical, "prefix_text"]
+
+        def make_joint(c_value: float, numeric_features=numeric_features):
+            return make_pipeline(
+                ColumnTransformer(
+                    [
+                        (
+                            "text",
+                            TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_features=20_000),
+                            "prefix_text",
+                        ),
+                        ("numeric", StandardScaler(), numeric_features),
+                        ("categorical", OneHotEncoder(handle_unknown="ignore"), categorical),
+                    ]
+                ),
+                tuned(c_value),
+            )
+
+        evaluate(
+            name,
+            make_joint,
+            fit.loc[train, features],
+            fit.loc[validation, features],
+            test[features],
+            fit.loc[fit_mask, features],
+            fit_weights,
         )
-        rows.append(row)
-        prediction_rows.append(control_predictions)
     return pd.DataFrame(rows), pd.concat(prediction_rows, ignore_index=True)
 
 
@@ -472,12 +653,16 @@ def _shortcut_control_outputs(
     labels: np.ndarray,
     scores: np.ndarray,
     threshold: float,
+    *,
+    c_value: float,
 ) -> tuple[dict[str, object], pd.DataFrame]:
     row = {
         "control": name,
         **binary_metrics(labels, scores, threshold=threshold),
         **change_point_metrics(metadata, scores, threshold),
         "threshold": threshold,
+        "c_value": c_value,
+        "training_weighting": "trace_equal",
     }
     columns = [
         "trace_id",
@@ -495,7 +680,54 @@ def _shortcut_control_outputs(
     predictions["label"] = labels
     predictions["score"] = scores
     predictions["threshold"] = threshold
+    predictions["c_value"] = c_value
     return row, predictions
+
+
+def stratified_probe_control_intervals(
+    probe_predictions: pd.DataFrame,
+    control_predictions: pd.DataFrame,
+    *,
+    stratum_column: str,
+    probe_threshold: float,
+    samples: int,
+    seed: int,
+    confidence_level: float,
+) -> pd.DataFrame:
+    """Probe-minus-control paired intervals within one metadata stratum."""
+    if stratum_column not in probe_predictions.columns:
+        raise ValueError(f"Probe predictions lack the stratum column {stratum_column!r}")
+    frames = []
+    for stratum_value, group in probe_predictions.groupby(stratum_column, sort=True):
+        if group["label"].nunique() < 2:
+            continue
+        matched = control_predictions[
+            control_predictions["trace_id"].isin(set(group["trace_id"].astype(str)))
+        ]
+        if matched.empty:
+            continue
+        result = paired_probe_control_intervals(
+            group,
+            matched,
+            probe_threshold=probe_threshold,
+            samples=samples,
+            seed=seed,
+            confidence_level=confidence_level,
+        )
+        result.insert(1, "stratum", f"{stratum_column}={stratum_value}")
+        frames.append(result)
+    if not frames:
+        return pd.DataFrame(
+            columns=[
+                "control",
+                "stratum",
+                "metric",
+                "probe_minus_control",
+                "ci_low",
+                "ci_high",
+            ]
+        )
+    return pd.concat(frames, ignore_index=True)
 
 
 def _data_flow_row(partition: str, source: str, frame: pd.DataFrame) -> dict[str, object]:
@@ -683,7 +915,12 @@ def paired_probe_control_intervals(
                     draws[metric].append(value)
         for metric, estimate in point.items():
             values = np.asarray(draws[metric], dtype=float)
-            ci_low, ci_high = quantile_interval(values, tail)
+            if values.size:
+                ci_low, ci_high = quantile_interval(values, tail)
+            else:
+                # Metrics that are undefined in every draw (for example correct
+                # rejection inside an all-erroneous stratum) get missing bounds.
+                ci_low = ci_high = float("nan")
             rows.append(
                 {
                     "control": control_name,
@@ -998,6 +1235,30 @@ def centered_discrimination(
             ),
         ]
     )
+
+
+def onset_eligibility_audit(traces: list[TraceSeries]) -> pd.DataFrame:
+    """Count traces excluded from the transition task because the error starts at step 0."""
+    rows = []
+    for eligible, group in pd.DataFrame(
+        [
+            {
+                "onset_eligible": int(trace.first_error > 0),
+                "first_error": trace.first_error,
+                "source": trace.source,
+            }
+            for trace in traces
+        ]
+    ).groupby("onset_eligible"):
+        row: dict[str, object] = {
+            "onset_eligible": int(eligible),
+            "n_traces": len(group),
+            "n_step0_errors": int((group["first_error"] == 0).sum()),
+            "n_later_onsets": int((group["first_error"] > 0).sum()),
+            "sources": ", ".join(sorted(group["source"].unique())),
+        }
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def subgroup_outcomes(
@@ -1599,8 +1860,23 @@ def _plot_followup(
     plt.close(figure)
 
 
+def _environment_metadata() -> dict[str, str]:
+    """Record the exact software environment used by this analysis run."""
+    return {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "scipy": scipy.__version__,
+        "scikit_learn": sklearn.__version__,
+        "matplotlib": plt.matplotlib.__version__,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def _build_summary(
     *,
+    environment: dict[str, str],
     predictions: pd.DataFrame,
     threshold: float,
     permutation: pd.DataFrame,
@@ -1625,6 +1901,7 @@ def _build_summary(
     summary = {
         "status": "complete",
         "analysis_type": "post_hoc_cpu_followup_on_frozen_experiment1_outputs",
+        "environment": environment,
         "selected_layer": int(predictions["layer"].iloc[0]),
         "threshold": threshold,
         "test_rows": len(predictions),
@@ -1727,7 +2004,8 @@ def _results_markdown(
     shortcut_rows = summary.get("shortcut_controls", [])
     shortcut_lines = "\n".join(
         f'- {row["control"]}: AUROC {row["auroc"]:.3f}, Process F1 '
-        f'{row["process_f1"]:.3f}'
+        f'{row["process_f1"]:.3f} (C={row.get("c_value", float("nan")):g}, '
+        f'trace-equal training weights)'
         for row in shortcut_rows
     )
     shortcut_section = (
@@ -1775,6 +2053,26 @@ from {length["global_correct_rejection"]:.3f} to
             "## Probe-versus-control paired intervals\n\n"
             f"{availability['probe_control_paired_intervals']}.\n"
         )
+    if "probe_control_intervals_by_stratum" in availability:
+        stratum_section = (
+            "## Stratified probe-versus-control intervals\n\n"
+            "Hidden-minus-control intervals within final-answer-correctness and source strata "
+            "are in `probe_control_intervals_by_final_answer.csv` and "
+            "`probe_control_intervals_by_source.csv`.\n"
+        )
+    else:
+        stratum_section = (
+            "## Stratified probe-versus-control intervals\n\n"
+            f"{availability.get('probe_control_intervals_by_stratum', 'not run')}.\n"
+        )
+    environment = summary.get("environment", {})
+    environment_section = (
+        "## Environment\n\n"
+        f"Python {environment.get('python', 'unknown')}, numpy "
+        f"{environment.get('numpy', 'unknown')}, pandas {environment.get('pandas', 'unknown')}, "
+        f"scipy {environment.get('scipy', 'unknown')}, scikit-learn "
+        f"{environment.get('scikit_learn', 'unknown')}.\n"
+    )
     return f"""# CPU-only follow-up results
 
 This analysis reuses the frozen Experiment 1 test predictions and intervention tables. It does not
@@ -1816,9 +2114,13 @@ sensitivity does not repair a readout that fails to distinguish valid from inval
 
 {paired_section}
 
+{stratum_section}
+
 {shortcut_section}
 
 {trace_section}
+
+{environment_section}
 
 ## Files
 

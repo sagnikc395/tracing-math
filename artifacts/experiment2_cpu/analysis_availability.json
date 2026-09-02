@@ -3,5 +3,6 @@
   "shortcut_controls": "complete",
   "trace_weighting_sensitivity": "complete",
   "data_flow": "complete",
-  "probe_control_paired_intervals": "complete"
+  "probe_control_paired_intervals": "complete",
+  "probe_control_intervals_by_stratum": "complete"
 }

@@ -22,6 +22,36 @@ layer are selected on validation AUROC. The held-out report includes AUROC, aver
 paired accuracy, two-way bootstrap intervals over error pairs and reused correct-trace IDs, and
 position, current-step TF--IDF, and shuffled-label controls.
 
+### Matching diagnostics (2026-09-02 addition)
+
+The workshop critique (C2) asks how much the matching reuses correct traces and how balanced the
+matched groups are. The `analyze-transition-matching` command reports this without activation
+shards:
+
+| Diagnostic | Value |
+| --- | ---: |
+| Pairs (all partitions) | 1,919 |
+| Unique placebo traces | 687 |
+| Placebo reuse median | 2 |
+| Placebo reuse 90th percentile | 6 |
+| Placebo reuse maximum | 46 |
+| Relative-position standardized difference | -0.011 |
+| Trace-length standardized difference | 0.146 |
+| Token-count standardized difference | 0.285 |
+
+Each error transition independently selects its closest correct transition, so a small number of
+correct traces are reused heavily (one placebo trace supports 46 pairs). Matched groups are close
+on relative position, but the placebo transitions come from somewhat longer, higher-token traces.
+Reuse affects model fitting and control diversity, not only uncertainty; the two-way bootstrap
+accounts for the dependence in intervals but does not remove it from the estimates.
+
+Two sensitivity refits are implemented for when activation shards are available:
+`run-transition-matching-sensitivity` refits the frozen protocol under one-to-one matching (each
+placebo used at most once per partition) and under inverse-reuse training weights (each placebo
+row weighted by one over its reuse count), reporting AUROC and average precision for each variant
+alongside the frozen with-reuse result. Until those refits run in the extraction environment, the
+transition result remains explicitly exploratory.
+
 ### Result
 
 The run produced 380 held-out error/placebo pairs. Validation selected hidden-state index 21 with
@@ -103,5 +133,7 @@ result is reported.
 ```bash
 uv run math-error-extended-followup --config configs/experiment3.yaml prepare-counterfactual-template
 uv run python data/processed/apply_corrections.py   # reapply drafts after re-generating the template
+uv run math-error-extended-followup --config configs/experiment3.yaml analyze-transition-matching
+uv run math-error-extended-followup --config configs/experiment3.yaml run-transition-matching-sensitivity  # needs shards
 uv run math-error-extended-followup --config configs/experiment3.yaml run-counterfactual-patching
 ```

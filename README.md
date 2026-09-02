@@ -9,12 +9,17 @@ The project uses `Qwen/Qwen2.5-Math-1.5B-Instruct` and the 3,400-example
 the NeurIPS 2026 [Interpretability for Discovery](https://interpretability4discovery.github.io/)
 workshop.
 
-## Current status — September 1, 2026
+## Current status — September 2, 2026
 
-**The reported Experiment 1 and original CPU follow-up are complete. The workshop follow-up
-pipeline is implemented; the transition probe and boundary control are complete, the
-counterfactual pairs are drafted for review (135 of 160 corrections drafted, 25 withheld, none
-verified), and patching plus the regenerated compact artifacts remain to be run.**
+**The reported Experiment 1, original CPU follow-up, and workshop-critique response analyses are
+complete. The critique's highest-value request is answered: shortcut controls now share the
+hidden probe's validation budget, and the equally tuned joint text-plus-metadata-plus-outcome
+baseline reaches AUROC 0.874, numerically above the hidden probe's 0.866 (paired difference
+-0.008 [-0.028, 0.013]). The hidden probe's surviving advantage is trace-level localization and
+correct rejection. Transition matching diagnostics quantify placebo reuse (687 unique placebos
+for 1,919 pairs, maximum 46), and one-to-one plus inverse-reuse sensitivity refits are
+implemented pending a shard run. Counterfactual patching remains unrun (135 of 160 corrections
+drafted, none verified).**
 
 The Experiment 1 analysis, compact result package, three paper figures, detailed result report, and
 compiled manuscript are complete. The follow-up reuses frozen Experiment 1 predictions and causal
@@ -26,18 +31,23 @@ It does not load the language model or extract new activations.
 | --- | --- |
 | Experiment 1 data, extraction, probes, controls, and interventions | Complete |
 | Experiment 1 report and frozen result tables | Complete |
-| NeurIPS manuscript, PDF, and three figures | Complete |
+| NeurIPS manuscript, PDF, and three figures | Complete: five-page main text verified |
 | Original CPU-only follow-up run and interpretation | Complete |
-| Yes/No verdict baseline and gated intervention rerun | Implemented; GPU rerun pending |
-| Length-aware thresholds and paired probe-control intervals | Implemented; frozen fit/control predictions pending |
-| Matched first-error transition probe | Complete: AUROC 0.769 vs matched placebos |
+| Equally tuned joint shortcut controls (critique C1) | Complete: joint + outcome AUROC 0.874 vs hidden 0.866 |
+| Stratified probe-control intervals (critique C1) | Complete: by final-answer correctness and source |
+| Trace-equal-weight control refits (critique C4) | Complete: all controls fit with trace-equal training weights |
+| Transition matching diagnostics (critique C2) | Complete: reuse and balance tables; sensitivity refits implemented, shard run pending |
+| Matched first-error transition probe | Complete: AUROC 0.769 vs matched placebos; explicitly exploratory |
 | Natural-token versus marker-token control | Complete: signal does not require the marker |
+| Yes/No verdict baseline and gated intervention rerun | Implemented; GPU rerun pending |
 | Verified counterfactual activation patching | Implemented; 160 pairs drafted (135 corrections, 25 withheld), review and GPU run pending |
 | Same-family 7B replication | Added to Colab notebook; optional GPU run |
 
 The compiled PDF is [paper/neurips_2026.pdf](paper/neurips_2026.pdf). The full Experiment 1 report
 is [results/experiment1.md](results/experiment1.md), and the CPU follow-up report is
-[results/experiment2_cpu.md](results/experiment2_cpu.md).
+[results/experiment2_cpu.md](results/experiment2_cpu.md). The workshop-critique response lives in
+those two reports under "2026-09-02 addition" headings; [CRITIQUE.md](CRITIQUE.md) is the
+author-side review that motivated them.
 
 The corrected verdict asks whether the reasoning prefix contains an error and scores the
 single-token `Yes` and `No` responses. `run-interventions` evaluates this baseline on the balanced

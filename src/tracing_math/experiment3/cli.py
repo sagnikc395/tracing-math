@@ -37,6 +37,24 @@ def fit_transition(config: ExtendedFollowupConfig) -> None:
     click.echo(json.dumps(fit_and_save_transition_probe(config), indent=2))
 
 
+@main.command("analyze-transition-matching")
+@click.pass_obj
+def analyze_transition_matching(config: ExtendedFollowupConfig) -> None:
+    """Report placebo reuse and covariate balance without activation shards."""
+    from tracing_math.experiment3.pipeline import analyze_transition_matching
+
+    click.echo(json.dumps(analyze_transition_matching(config), indent=2))
+
+
+@main.command("run-transition-matching-sensitivity")
+@click.pass_obj
+def transition_matching_sensitivity(config: ExtendedFollowupConfig) -> None:
+    """Refit the frozen transition protocol with one-to-one and inverse-reuse matching."""
+    from tracing_math.experiment3.pipeline import run_transition_matching_sensitivity
+
+    click.echo(json.dumps(run_transition_matching_sensitivity(config), indent=2))
+
+
 @main.command("extract-boundary-controls")
 @click.pass_obj
 def extract_boundaries(config: ExtendedFollowupConfig) -> None:

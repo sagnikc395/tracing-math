@@ -331,8 +331,12 @@ def test_shortcut_controls_use_prefix_text_and_frozen_partitions() -> None:
         "prefix TF-IDF",
         "structural metadata",
         "metadata plus final outcome",
+        "joint text + metadata",
+        "joint text + metadata + outcome",
     }
-    assert len(predictions) == 3 * len(test_rows)
+    assert controls["c_value"].isin([0.01, 0.1, 1.0, 10.0]).all()
+    assert (controls["training_weighting"] == "trace_equal").all()
+    assert len(predictions) == 5 * len(test_rows)
     assert predictions.groupby("control")["threshold"].nunique().eq(1).all()
 
 

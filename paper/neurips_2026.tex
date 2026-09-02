@@ -20,6 +20,9 @@
 \newcommand{\model}{Qwen2.5-Math-1.5B-Instruct}
 \newcommand{\dataset}{ProcessBench}
 
+\setlength{\parskip}{0pt}
+\setlength{\bibsep}{2.5pt}
+
 \title{Decodability Is Not Localization:\
 Auditing Hidden-State Error Probes in Qwen2.5-Math-1.5B-Instruct}
 \workshoptitle{Interpretability for Discovery}
@@ -32,18 +35,19 @@ Auditing Hidden-State Error Probes in Qwen2.5-Math-1.5B-Instruct}
 We audit whether hidden-state probes identify when mathematical reasoning first becomes invalid, or
 instead exploit easier correlates of an invalid prefix. In a case study of \model{} on \dataset{},
 a linear probe predicts the persistent target \emph{invalid so far} with held-out AUROC $0.866$.
-This number overstates what the representation result establishes: prefix TF--IDF reaches $0.760$,
-structural metadata reaches $0.780$, and metadata augmented with final-answer correctness reaches
-$0.857$; the last AUROC is not distinguishable from the hidden-state result under a paired
-whole-trace bootstrap (difference $0.009$, 95\% CI $[-0.014,0.032]$). Hidden states retain a larger
-advantage on trace-level localization (Process F1 $0.393$ versus $0.288$ for metadata plus outcome;
-paired difference $0.105$ [$0.047,0.163]$), but localize the exact annotated boundary on only
-$28.9\%$ of erroneous traces and falsely alarm on $38.8\%$ of correct traces. A post-hoc,
-metadata-matched transition probe obtains AUROC $0.769$ on held-out pairs, suggesting that an
-onset-related state change is decodable but not providing confirmatory evidence. Two verdict
-readouts fail their behavioral validity checks, so the intervention remains a failed pilot. The
-supported conclusion is a model-specific gap among prefix decodability, onset localization,
-calibration, and demonstrated causal use.
+Equally tuned nuisance baselines collapse most of that margin: prefix TF--IDF reaches $0.760$,
+structural metadata $0.780$, and a joint text-plus-metadata model with final-answer correctness
+reaches $0.874$---numerically \emph{above} the hidden state (paired difference $-0.008$, 95\% CI
+$[-0.028,0.013]$). The hidden probe's remaining value is narrower and task-specific: it localizes
+the annotated onset better (Process F1 $0.393$ versus $0.294$; paired difference $0.099$
+$[0.040,0.158]$) and rejects correct traces that the joint shortcut model falsely alarms on, while
+it localizes exactly on only $28.9\%$ of erroneous traces and falsely alarms on $38.8\%$ of correct
+traces. A post-hoc, metadata-matched transition probe obtains AUROC $0.769$ on held-out pairs;
+matched-covariate balance diagnostics and reuse quantification keep it explicitly exploratory. Two
+verdict readouts fail their behavioral validity checks, so the intervention remains a failed pilot.
+We conclude that decodability, incremental information over tuned nuisances, localization,
+calibration, and demonstrated causal use are distinct validation levels, and we extract a concrete
+checklist for when an internal pattern is safe to treat as a candidate discovery.
 \end{abstract}
 
 \section{Introduction}
@@ -51,26 +55,29 @@ calibration, and demonstrated causal use.
 Process supervision asks whether each step of a solution is valid, rather than whether the final
 answer happens to be correct \citep{cobbe2021verifiers,lightman2023verify}. A related mechanistic
 question is whether a solving model's own representation changes when its reasoning first goes
-wrong. Probe accuracy alone cannot answer that question. If every boundary after the first error
-is labeled positive, a classifier may recognize accumulated inconsistency, solution length,
-generator style, or final-answer outcome without responding at the onset.
+wrong. Probe accuracy alone cannot answer it: if every boundary after the first error is labeled
+positive, a classifier may recognize accumulated inconsistency, solution length, generator style,
+or final-answer outcome without responding at the onset.
 
-We separate four claims that are often collapsed: (i) invalid prefixes are linearly decodable;
-(ii) a score localizes the first error; (iii) the signal transfers across benchmark sources; and
-(iv) the model behaviorally uses the decoded direction. We test these claims in one explicitly
-bounded setting: \model{} on \dataset{} \citep{yang2024qwenmath,zheng2025processbench}. The primary
-pipeline uses problem-grouped splits and a persistent invalid-so-far target. We then audit it with
-prefix-text and metadata controls, equal-trace weighting, trace-macro metrics, source and generator
-stratification, an onset-aligned analysis, and a matched transition probe.
+The \emph{Interpretability for Discovery} framing makes the stakes explicit: a linearly decodable
+pattern is a \emph{candidate}, not yet discovered knowledge. Turning a candidate into a claim
+requires validation at distinct levels, and failing any one changes what the pattern can be used
+for. This paper is a worked negative example of that validation sequence. We test four claims that
+are often collapsed: (i) invalid prefixes are linearly decodable; (ii) a score localizes the first
+error; (iii) the signal transfers across benchmark sources; and (iv) the model behaviorally uses
+the decoded direction. We test them in one bounded setting: \model{} on \dataset{}
+\citep{yang2024qwenmath,zheng2025processbench}, with problem-grouped splits and a persistent
+invalid-so-far target, audited by prefix-text, metadata, and joint nuisance controls fit under the
+same validation budget as the probe, source and generator stratification, an onset-aligned
+analysis, and a matched transition probe.
 
-The audit changes the interpretation. The hidden-state probe's pooled AUROC is high, but a
-diagnostic model that is given structural metadata and final-answer correctness nearly matches it.
-The hidden state is more useful for the thresholded trace-level task, and its score changes near the
-human annotation, but localization remains unreliable. The causal assay is not interpretable
-because its baseline verdict scores rank valid and invalid prefixes below chance. We therefore
-make one narrow contribution: a worked example showing that strong prefix decoding and
-cross-source ranking can coexist with weak onset localization, shortcut sensitivity, poor
-calibration, and no validated causal evidence.
+The audit changes the interpretation. The hidden-state probe's pooled AUROC is high, but an
+equally tuned joint shortcut model combining prefix text, structural metadata, and final-answer
+correctness exceeds it numerically. What survives is a narrower, task-specific advantage:
+trace-level localization and correct rejection, both weak in absolute terms, with poor
+length- and source-dependent calibration and an uninterpretable behavioral assay. We contribute a
+documented failure mode: strong prefix decoding and cross-source ranking can coexist with no
+incremental pooled information over tuned nuisances.
 
 \section{Related work and contribution boundary}
 
@@ -79,15 +86,15 @@ External process reward models learn step quality from human or model supervisio
 model-generated traces from GSM8K, MATH, OlympiadBench, and Omni-MATH
 \citep{zheng2025processbench,hendrycks2021math,he2024olympiadbench,gao2024omnimath}. We repartition
 these benchmark sources for representation analysis; they are heterogeneous sources, not
-independent mathematical domains or evidence of model-family generalization.
+independent domains or evidence of model-family generalization.
 
-Closest to this work, Sun et al. probe arithmetic errors and use the probe for selective
+Closest to this work, Sun et al.\ probe arithmetic errors and use the probe for selective
 re-prompting; ReProbe learns hidden-state step scorers for test-time scaling; and STEP uses
 hidden-state scores to prune reasoning traces
 \citep{sun2025arithmetic,ni2026reprobe,liang2026earlysignals}. Table~\ref{tab:delta} states the
-comparison at the level needed for our claim. Our novelty is not that hidden states predict
-reasoning quality. It is the joint audit of a human first-error target using first-crossing,
-matched-transition, source-transfer, shortcut, and failed-assay evidence.
+comparison at the level needed for our claim: our novelty is not that hidden states predict
+reasoning quality, but the joint audit of a human first-error target using first-crossing,
+matched-transition, source-transfer, equally tuned nuisance, and failed-assay evidence.
 
 \begin{table}[t]
 \centering
@@ -95,6 +102,7 @@ matched-transition, source-transfer, shortcut, and failed-assay evidence.
 \caption{Closest hidden-state verifier work. ``Use'' records the reported downstream or causal
 test, not a judgment of overall paper quality.}
 \label{tab:delta}
+\setlength{\tabcolsep}{4pt}
 \begin{tabular}{lllll}
 \toprule
 Work & Supervision / task & Scope & Onset evaluation & Use test \\
@@ -102,15 +110,14 @@ Work & Supervision / task & Scope & Onset evaluation & Use test \\
 Sun et al. & arithmetic error & addition, GSM8K & no first-error metric & re-prompting \\
 ReProbe & step credibility & math, planning, QA & step scoring & test-time scaling \\
 STEP & step quality & reasoning traces & early step scoring & pruning \\
-Ours & human first error & four PB sources & first crossing + transition & failed pilot \\
+Ours & human first error & four ProcessBench sources & first crossing + transition & failed pilot \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 Probing work cautions that decodability need not imply behavioral use
-\citep{hewitt2019control,belinkov2022probing,elazar2021amnesic}. This distinction is especially
-important here: an additive intervention is evidence only if its behavioral readout first
-distinguishes the relevant baseline states.
+\citep{hewitt2019control,belinkov2022probing,elazar2021amnesic}; an additive intervention is
+evidence only if its behavioral readout first distinguishes the relevant baseline states.
 
 \section{Experimental design}
 \label{sec:method}
@@ -120,33 +127,16 @@ distinguishes the relevant baseline states.
 Each \dataset{} trace supplies a problem, generator identity, written steps, source, final-answer
 correctness, and a human first-error index $e_i$, with $e_i=-1$ for fully correct traces. Traces
 sharing normalized problem text form a group. Seed 42 assigns groups within source $\times$
-error-status strata to 60\% train, 20\% validation, and 20\% test. A 2,048-token limit excludes a
-complete trace rather than truncating it. Table~\ref{tab:dataflow} gives the full split accounting;
-Appendix~\ref{app:data} gives source-level counts.
-
-\begin{table}[t]
-\centering
-\small
-\caption{Data flow. Boundary counts are written-step boundaries.}
-\label{tab:dataflow}
-\begin{tabular}{lrrrrrr}
-\toprule
-Split & Attempted & Retained & Excluded & Boundaries & Error traces & Correct traces \\
-\midrule
-Train & 2,041 & 2,014 & 27 & 14,944 & 1,311 & 703 \\
-Validation & 681 & 677 & 4 & 4,980 & 444 & 233 \\
-Test & 678 & 669 & 9 & 4,985 & 432 & 237 \\
-\midrule
-All & 3,400 & 3,360 & 40 & 24,909 & 2,187 & 1,173 \\
-\bottomrule
-\end{tabular}
-\end{table}
+error-status strata to 60\% train, 20\% validation, and 20\% test: of 3,400 attempted traces,
+3,360 are retained (2,187 with an annotated error), yielding 24,909 written-step boundaries and
+669 held-out traces. A 2,048-token limit excludes a complete trace rather than truncating it.
+Appendix~\ref{app:data} gives the full attempted/retained accounting by split and source.
 
 We run \model{} in bfloat16 and record its 1,536-dimensional residual-stream state at each written
-step and each of 29 hidden-state indices. The completed extraction used batch size 16 on one NVIDIA
-A100 GPU. Python 3.10+, PyTorch 2.2--2.x, Transformers 4.45--4.x, and scikit-learn 1.4--1.x are
-specified in the accompanying environment. Artifact identity fixes the model, context length,
-dtype, and dataset SHA-256 (Appendix~\ref{app:repro}).
+step and each of 29 hidden-state indices. The completed extraction used batch size 16 on one
+NVIDIA A100 GPU. Locked package versions, compute, storage, and licenses appear in
+Appendix~\ref{app:repro}; artifact identity fixes the model, context length, dtype, and dataset
+SHA-256.
 
 \subsection{Persistent target, probe, and trace-level estimands}
 
@@ -164,168 +154,190 @@ on train plus validation and evaluated once on test.
 The predicted first error is the first threshold crossing, or $-1$ if none occurs. We report
 boundary AUROC and average precision, exact error-boundary accuracy among erroneous traces,
 correct-trace rejection, their harmonic mean (Process F1), complete-trace accuracy, and detection
-within one or two steps. These localization metrics weight traces equally. Primary intervals use
+within one or two steps; the localization metrics weight traces equally. Primary intervals use
 1,000 whole-trace bootstrap draws; the post-hoc paired comparisons use 2,000 draws because they
-were added in a later audit configuration. We state this difference rather than presenting the
-two draw counts as one frozen protocol.
+were added in a later audit configuration, which we state rather than presenting one frozen
+protocol.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\linewidth]{method_and_trajectory.pdf}
+\includegraphics[width=0.82\linewidth]{method_and_trajectory.pdf}
 \caption{The persistent target and first-crossing evaluation. A causal forward pass produces one
 boundary state per step. In the example, the score crosses one step after the annotated error.}
 \label{fig:method}
 \end{figure}
 
-\subsection{Shortcut and weighting audits}
+\subsection{Shortcut, joint-control, and weighting audits}
+\label{sec:controls}
 
-Every added control uses the same train/validation/test groups and selects its threshold on
-validation only. Current-step TF--IDF uses the destination step. Prefix TF--IDF uses the problem
-and all reasoning text available through the current boundary. Structural metadata uses source,
-generator, absolute and fractional step position, trace length, and token count. A deliberately
-strong diagnostic adds final-answer correctness; because that field can be unavailable online, it
-is a shortcut audit rather than a deployable baseline. A shuffled-label hidden probe checks the
-fitting procedure. We report paired probe-minus-control intervals from trace resampling.
+Every nuisance control receives the same model-selection budget as the hidden-state probe: L2
+regularization is selected from $\{0.01,0.1,1,10\}$ by validation AUROC, the threshold is selected
+on the same validation scores, and the selected model is refit on train plus validation before the
+single test evaluation. Each control is also fit with sample weights inverse to boundary counts,
+so every trace contributes equal total training loss, mirroring a trace-equal objective rather
+than reweighting evaluation after fitting. Current-step TF--IDF uses the destination step; prefix
+TF--IDF uses the problem and all reasoning text through the current boundary; structural metadata
+uses source, generator, absolute and fractional step position, trace length, and token count. Two
+\emph{joint} baselines combine prefix text, all structural metadata, and---in the stronger
+variant---final-answer correctness, so complementarity across separately fit controls cannot be
+mistaken for a hidden-state advantage.
 
-The primary objective and boundary AUROC weight each boundary equally. To expose its consequence,
-we recompute AUROC, average precision, and step F1 using weights inverse to the number of boundaries
-in each trace. We also stratify trace-level outcomes by source, generator (at least 20 test traces),
-final-answer correctness, error position, trace-length quartile, and token-count quartile. These
-subgroups are descriptive, not multiple confirmatory tests.
+Final-answer correctness is a benchmark annotation, not an online signal: it records whether the
+trace's final answer matches the benchmark reference solution, for every trace regardless of where
+an error occurs. We use it as a diagnostic upper bound on nuisance predictability, not a deployable
+baseline. A shuffled-label hidden probe checks the fitting procedure. We report paired
+probe-minus-control intervals from whole-trace resampling, pooled and within
+final-answer-correctness strata. The primary objective weights each boundary equally in
+\emph{evaluation}; the trace-equal refit above addresses the training asymmetry. Descriptive
+subgroup outcomes stratify by source, generator, final-answer correctness, error position, and
+length and token-count quartiles.
 
 \subsection{Post-hoc onset analyses}
 
 The following analyses were designed after the primary test result and are labeled post-hoc. We
 circularly shift each frozen score trajectory 5,000 times, preserving its values while breaking
 alignment to the annotation. We compare the score jump at each noninitial error with a transition
-from a fully correct trace, preferring the same source and generator and then minimizing differences
-in relative position, trace length, and token count.
+from a fully correct trace, preferring the same source and generator and then minimizing
+differences in relative position, trace length, and token count.
 
 The transition probe is a separate analysis of $h_{i,e_i}-h_{i,e_i-1}$. Every eligible erroneous
-transition is paired with a correct-trace transition in the same frozen partition. The resulting
-balanced sets contain 1,152 train, 387 validation, and 380 test pairs. Layer and $C$ are selected
-by validation AUROC; index 21 and $C=0.01$ are selected. The test report includes AUROC, average
-precision, within-pair accuracy, and a two-way bootstrap over error IDs and reused correct-trace IDs.
-Controls predict from position, destination-step TF--IDF, or shuffled labels. This protocol is now
-fully specified and executable, but the test set was not untouched when the analysis was conceived.
+transition is paired with a correct-trace transition in the same frozen partition, giving 1,152
+train, 387 validation, and 380 test pairs; the pairing reuses correct traces (median 2 pairs per
+placebo trace, 90th percentile 6, maximum 46, from 687 unique placebos), and matched groups are
+close on relative position but retain token-count and length differences (standardized
+differences $0.28$ and $0.15$). Layer and $C$ are selected by validation AUROC; index 21 and
+$C=0.01$ are selected. Controls predict from position, destination-step TF--IDF, or shuffled
+labels. The protocol is fully specified and executable, but the test set was not untouched when
+the analysis was conceived, so the result is exploratory regardless of its interval.
 
 \section{Results}
 
-\subsection{High prefix AUROC is not specific to hidden-state invalidity}
+\subsection{A tuned joint shortcut model matches or exceeds pooled AUROC}
 
 The selected probe reaches AUROC $0.866$ (95\% CI $[0.849,0.884]$), average precision $0.843$
 ($[0.813,0.870]$), and step F1 $0.743$ ($[0.716,0.769]$). Within erroneous traces, first-step
 centering leaves pooled AUROC at $0.881$ ($[0.862,0.900]$), and mean per-trace AUROC is $0.968$
 ($[0.958,0.976]$). Stable trace offsets therefore do not explain all discrimination.
 
-The shortcut audit nevertheless makes the pooled result much less specific. Table~\ref{tab:controls}
-shows that structural metadata reaches AUROC $0.780$, prefix text reaches $0.760$, and metadata plus
-final outcome reaches $0.857$. The hidden-minus-outcome-metadata AUROC difference is only $0.009$
-($[-0.014,0.032]$), while the Process F1 difference is $0.105$ ($[0.047,0.163]$). Thus hidden states
-add trace-level localization value under the selected threshold, but pooled ranking alone cannot be
-interpreted as an isolated representation of mathematical invalidity.
+Table~\ref{tab:controls} shows the equally tuned comparison. Prefix text reaches AUROC $0.760$,
+structural metadata $0.780$, and their joint model $0.810$: the controls' errors are partly
+complementary. Adding final-answer correctness yields the strongest nuisance model at AUROC
+$0.874$, numerically above the hidden probe's $0.866$ (paired hidden-minus-joint difference
+$-0.008$ $[-0.028,0.013]$, which includes zero). Under a maximally fair tuning budget, the hidden
+state shows \emph{no incremental pooled-ranking information} over the best nuisance predictor.
+
+The decomposition matters more than the pooled number. The hidden probe retains a Process F1
+advantage of $0.099$ ($[0.040,0.158]$) and an exact-localization advantage of $0.113$
+($[0.064,0.163]$), because the joint model crosses threshold on most correct traces (correct
+rejection $0.612$ versus $0.895$; hidden-minus-joint difference $-0.283$ $[-0.347,-0.218]$). What
+the hidden state contributes is temporal specificity---when to start alarming---not better
+separation of invalid prefixes in aggregate. Within final-answer-correctness strata, the hidden
+AUROC advantage is confined to traces whose final answer is correct ($0.073$ $[0.039,0.107]$) and
+vanishes among incorrect-outcome traces ($-0.001$ $[-0.022,0.021]$), consistent with the outcome
+field carrying most pooled information when it is informative.
 
 \begin{table}[t]
 \centering
 \small
-\caption{Held-out probe and shortcut controls. Paired intervals are hidden minus control.}
+\caption{Equally tuned held-out comparison. All rows use the same validation $C$ grid,
+validation threshold selection, and trace-equal training weights. Paired intervals are hidden
+minus control; positive $\Delta$ favors the hidden state.}
 \label{tab:controls}
-\begin{tabular}{lrrrr}
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{lrrrrl}
 \toprule
-Predictor & AUROC & Process F1 & $\Delta$ AUROC [95\% CI] & $\Delta$ F1 [95\% CI] \\
+Predictor & AUROC & Proc.\ F1 & Exact & Corr.\ rej. & $\Delta$ AUROC [95\% CI] \\
 \midrule
-Hidden state & .866 & .393 & --- & --- \\
-Prefix TF--IDF & .760 & .281 & .106 [.083,.132] & .112 [.058,.166] \\
-Structural metadata & .780 & .147 & .086 [.065,.107] & .246 [.198,.298] \\
-Metadata + final outcome & .857 & .288 & .009 [$-$ .014,.032] & .105 [.047,.163] \\
-Current-step TF--IDF & .733 & .254 & .133 [.111,.155] & .139 [.090,.188] \\
-Position only & .730 & .054 & .136 [.113,.159] & .339 [.292,.385] \\
-Shuffled hidden labels & .518 & .179 & .348 [.317,.375] & .214 [.159,.266] \\
+Hidden state & .866 & .393 & .289 & .612 & --- \\
+Prefix TF--IDF & .760 & .281 & .293 & .477 & .106 [.083,.132] \\
+Structural metadata & .780 & .147 & .164 & .194 & .086 [.065,.107] \\
+Joint text + metadata & .810 & .210 & .208 & .278 & .056 [.037,.073] \\
+Metadata + final outcome & .854 & .262 & .335 & .646 & .012 [$-$ .012,.036] \\
+Joint + final outcome & .874 & .294 & .430 & .895 & $-$ .008 [$-$ .028,.013] \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Equal trace weighting changes AUROC by $+0.001$ (95\% paired CI $[-0.007,0.010]$), average precision
-by $-0.005$ ($[-0.018,0.009]$), and step F1 by $-0.009$ ($[-0.021,0.005]$). Boundary weighting is
-therefore not driving the aggregate result, although length remains an important calibration
-nuisance. Complete-trace accuracy falls from $0.491$ in the shortest length quartile to $0.264$ in
-the longest; correct rejection falls from $0.719$ to $0.350$. Source-level complete accuracy ranges
-from $0.298$ to $0.512$, and generator-level estimates are correspondingly heterogeneous
-(Appendix~\ref{app:subgroups}).
+Equal trace weighting at evaluation changes AUROC by $+0.001$ (95\% paired CI $[-0.007,0.010]$).
+Complete-trace accuracy falls from $0.491$ in the shortest length quartile to $0.264$ in the
+longest, with heterogeneous source-level estimates (Appendix~\ref{app:subgroups}).
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\linewidth]{predictive_results.pdf}
+\includegraphics[width=0.82\linewidth]{predictive_results.pdf}
 \caption{Layer-wise held-out performance and original controls. The embedding-index row is a
 linear probe at hidden-state index 0, included as a depth comparison rather than a lexical control.
 Process F1 is N/A within error-only traces because correct-trace rejection is undefined. The
-stronger prefix and metadata controls appear in Table~\ref{tab:controls}.}
+equally tuned controls appear in Table~\ref{tab:controls}.}
 \label{fig:predictive}
 \end{figure}
 
 \subsection{First-error localization remains weak}
 
 The hidden score localizes $28.9\%$ of erroneous traces exactly, $59.3\%$ within one step, and
-$72.7\%$ within two. It crosses somewhere on $88.7\%$ of erroneous traces, but crosses on
-$38.8\%$ of fully correct traces. Among detections, the signed error averages $+0.59$ steps
-($[+0.36,+0.80]$), indicating late detection. Process F1 is $0.393$ ($[0.351,0.436]$) and
-complete-trace accuracy is $0.404$.
+$72.7\%$ within two. It crosses somewhere on $88.7\%$ of erroneous traces, but also on $38.8\%$
+of fully correct traces, and among detections it is late by $+0.59$ steps on average
+($[+0.36,+0.80]$). Process F1 is $0.393$ ($[0.351,0.436]$); complete-trace accuracy is $0.404$.
 
 Post-hoc temporal tests show more alignment than these threshold metrics alone suggest. Exact
 localization is $0.289$ versus $0.164$ under circular shifts ($p=0.0002$). Across 380 noninitial
 errors, the mean onset jump is $0.257$; matched correct transitions rise $0.113$, for a paired
-difference of $0.144$ ($[0.096,0.193]$). The mean score continues from $0.341$ immediately before
-the error to $0.559$ at onset, $0.680$ one step later, and $0.731$ two steps later. This is a
-gradual transition into a persistent state, not a sharp alarm.
+difference of $0.144$ ($[0.096,0.193]$). The score continues from $0.341$ immediately before the
+error to $0.559$ at onset, $0.680$ one step later, and $0.731$ two steps later: a gradual
+transition into a persistent state, not a sharp alarm. The transition task excludes 52 test traces
+whose first error occurs at step 0, which may differ systematically from the 380 eligible ones.
 
 The matched transition probe reaches AUROC $0.769$ ($[0.713,0.820]$), average precision $0.741$
-($[0.672,0.816]$), and paired accuracy $0.753$ ($[0.676,0.824]$). Position, destination-step
-TF--IDF, and shuffled-label controls reach AUROC $0.63$, $0.67$, and $0.58$. This result supports
-linear decodability of an onset-related change on the already-inspected split. Replication on an
-untouched set or second model is required before treating it as confirmatory.
+($[0.672,0.816]$), and paired accuracy $0.753$ ($[0.676,0.824]$); position, destination-step
+TF--IDF, and shuffled-label controls reach $0.63$, $0.67$, and $0.58$. Given the placebo reuse and
+retained covariate imbalance documented above, this supports decodability of an onset-related
+change on the already-inspected split; sensitivity refits under one-to-one and inverse-reuse
+matching, and replication on untouched data, are needed before any confirmatory reading.
 
 \subsection{Source ranking transfers; model generalization is untested}
 
 Separate probes trained on one ProcessBench source and tested on another have mean off-diagonal
 AUROC $0.805$ versus $0.845$ on the diagonal; every off-diagonal cell exceeds $0.739$. Thresholded
-Process F1 is less stable: means are $0.261$ off diagonal and $0.336$ on diagonal, with individual
+Process F1 is less stable: $0.261$ off diagonal versus $0.336$ on diagonal, with individual
 off-diagonal values from $0.055$ to $0.371$. These cells show cross-source ranking within one
-benchmark construction. They do not establish transfer to another model size, family, or dataset.
+benchmark construction, not transfer to another model size, family, or dataset.
 
-\subsection{The causal experiment is a failed pilot}
+\subsection{Scope of the evidence}
 
-The original \texttt{CORRECT}/\texttt{INCORRECT} readout has baseline AUROC $0.283$ and specificity
-zero. A revised question with conditional Yes/No probabilities remains below chance (AUROC $0.342$,
-specificity $0.203$ on 256 balanced boundaries). The intervention code now requires both AUROC
-$>0.5$ and nonzero specificity before a learned-direction effect is interpreted. Neither readout
-passes. Random orthogonal directions cannot substitute for a positive control of assay
-sensitivity, so the dose response is not causal evidence for or against behavioral use. We report
-the pilot only to delimit the evidence and do not include it in the main contribution.
+This paper is an existence proof of a failure mode in one small math-tuned model on one benchmark
+construction---decodability without incremental pooled information, localization, calibration, or
+causal validation---not a measurement of its prevalence across models. A second-model replication
+under the frozen protocols reported here is deliberately left as follow-up work.
 
 \section{Limitations, responsible use, and conclusion}
 
-This is a one-model, one-benchmark case study. We did not run the requested second-family or
-second-scale replication, so the title and claims name \model{}. The transition probe, temporal
-randomization, prefix and metadata controls, trace-weighting analysis, and subgroup analyses are
-post-hoc. No dated public preregistration exists; the repository records the frozen split seed,
-target, model-selection grid, and original bootstrap count, but cannot retroactively establish
-preregistration. Corrected/error twins have not received independent human verification, so no
-counterfactual-patching result is reported. A stronger next experiment would verify such twins,
-hold problem and boundary fixed, reserve an untouched onset test set, and validate the behavioral
-readout with a known effective intervention before testing a probe direction.
+This is a one-model, one-benchmark case study; the title and claims name \model{}. All added
+analyses---transition probe, temporal randomization, shortcut and joint controls, trace-equal
+refits, subgroups---are post-hoc, and all intervals are conditional on one frozen split and the
+completed selection pipeline: they capture resampling uncertainty, not split or selection
+sensitivity. No dated preregistration exists. Corrected/error twins lack independent verification,
+so no patching result is reported; a stronger follow-up would verify twins, reserve an untouched
+onset set, and validate the readout first.
 
-The detector is unsuitable for grading, certification, or unattended feedback. Its $38.8\%$
-false-alarm rate on correct traces could penalize valid work, and its late detections could allow an
-invalid derivation to propagate. The source, generator, outcome, and length sensitivity makes
-deployment shift especially risky. Positive uses are limited to research diagnostics with human
-or formal verification of consequential mathematical claims.
+The detector is unsuitable for grading, certification, or unattended feedback: its $38.8\%$
+false-alarm rate on correct traces could penalize valid work, its late detections could let an
+invalid derivation propagate, and its sensitivity to source, outcome, and length makes
+distribution shift especially risky. Positive uses are limited to research diagnostics with human
+or formal verification.
 
-The central empirical finding is a gap, not an internal ``knowledge'' claim. In \model{},
-invalid-so-far prefixes are linearly decodable and their scores change near annotated errors. Yet
-nuisance metadata nearly matches pooled AUROC, exact onset localization is low, calibration varies
-across trace length and source, cross-model generalization is unknown, and no behavioral assay
-supports a causal conclusion. Reporting all of these together gives a more auditable account of
-what hidden-state verifier scores do and do not establish.
+The central empirical finding is a gap with a precise shape: in \model{}, invalid-so-far prefixes
+are linearly decodable, but an equally tuned joint text-plus-metadata model with final-answer
+correctness matches or exceeds the hidden state's pooled AUROC; what remains is a
+localization and correct-rejection advantage, itself weak in absolute terms.
+
+For discovery practice, this audit reduces to a checklist. Before treating a decodable internal
+pattern as discovered knowledge, test and report: (1) whether equally tuned nuisance models---fit
+jointly, under the same selection budget---recover the pooled performance; (2) whether any residual
+advantage survives on the task-specific metrics that matter, with paired intervals; (3) whether
+temporal correspondence holds against matched and shifted controls; (4) whether calibration and
+subgroup behavior survive the shifts the use case implies; and (5) whether a behavioral readout
+distinguishes the relevant states before any causal claim. Our candidate passed (1) only in the
+negative and failed the rest in absolute terms.
 
 \bibliographystyle{plainnat}
 \bibliography{references}
@@ -334,6 +346,25 @@ what hidden-state verifier scores do and do not establish.
 
 \section{Additional data accounting}
 \label{app:data}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Data flow. Attempted / retained traces / exclusions by source and split; boundary counts
+are written-step boundaries.}
+\label{tab:dataflow}
+\begin{tabular}{lrrrrrr}
+\toprule
+Split & Attempted & Retained & Excluded & Boundaries & Error traces & Correct traces \\
+\midrule
+Train & 2,041 & 2,014 & 27 & 14,944 & 1,311 & 703 \\
+Validation & 681 & 677 & 4 & 4,980 & 444 & 233 \\
+Test & 678 & 669 & 9 & 4,985 & 432 & 237 \\
+\midrule
+All & 3,400 & 3,360 & 40 & 24,909 & 2,187 & 1,173 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \begin{table}[h]
 \centering
@@ -380,6 +411,18 @@ traces whose reasoning contains an annotated error. Across generators with at le
 traces, complete accuracy ranges from $0.316$ to $0.621$. These wide, overlapping estimates are
 descriptive evidence of heterogeneity rather than generator rankings.
 
+\section{The failed behavioral pilot}
+\label{app:causal}
+
+The original \texttt{CORRECT}/\texttt{INCORRECT} readout has baseline AUROC $0.283$ and specificity
+zero. A revised question with conditional Yes/No probabilities remains below chance (AUROC $0.342$,
+specificity $0.203$ on 256 balanced boundaries). The intervention code requires both AUROC
+$>0.5$ and nonzero specificity before a learned-direction effect is interpreted. Neither readout
+passes. Random orthogonal directions cannot substitute for a positive control of assay
+sensitivity, so the dose response is not causal evidence for or against behavioral use. We report
+the pilot only to delimit the evidence: no directional intervention was interpreted, so the causal
+section of the audit is empty by design rather than by null result.
+
 \section{Reproduction record}
 \label{app:repro}
 
@@ -399,12 +442,37 @@ uv run math-error-cpu-followup \
 uv run math-error-extended-followup \
   --config configs/experiment3.yaml \
   fit-transition-probe
+uv run math-error-extended-followup \
+  --config configs/experiment3.yaml \
+  analyze-transition-matching
 uv run pytest
 uv run ruff check src tests
 \end{verbatim}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Compute and licensing record.}
+\label{tab:compute}
+\begin{tabular}{lp{0.72\linewidth}}
+\toprule
+Extraction and interventions & one NVIDIA A100 (40\,GB), bfloat16, batch 16; single passes over \\
+ & 3,400 traces; $\sim$hours of GPU time \\
+Probe fitting and audits & CPU only; the largest stage bootstraps 2,000 trace resamples \\
+Storage & $\sim$1\,GB compact predictions plus shards for raw activations \\
+Locked versions & Python 3.10+; PyTorch 2.13.0; Transformers 4.57.6; scikit-learn 1.7.2; \\
+ & NumPy 2.2--2.5; pandas 2.3.3; SciPy 1.15--1.18; datasets 4.8.5 \\
+Licenses & \dataset{}: Apache 2.0. \model{}: Apache 2.0. Analysis code: repository license. \\
+ & Benchmark sources retain their original terms. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 Activation extraction and the original intervention used one A100 GPU; probe fitting and all audit
 analyses are CPU-capable. Extraction is sharded and resumable. The code rejects mismatched dataset,
 model, dtype, and context-length identities and stores all selected thresholds and predictions.
+The supplement records the exact environment of each analysis stage in its machine-readable
+summary files.
 
 \newpage
 \input{checklist.tex}

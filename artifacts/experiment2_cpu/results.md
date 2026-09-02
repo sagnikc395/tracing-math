@@ -48,11 +48,18 @@ from 0.612 to
 Whole-trace paired bootstrap intervals are in `probe_control_paired_intervals.csv`.
 
 
+## Stratified probe-versus-control intervals
+
+Hidden-minus-control intervals within final-answer-correctness and source strata are in `probe_control_intervals_by_final_answer.csv` and `probe_control_intervals_by_source.csv`.
+
+
 ## Prefix and metadata shortcut controls
 
-- prefix TF-IDF: AUROC 0.760, Process F1 0.281
-- structural metadata: AUROC 0.780, Process F1 0.147
-- metadata plus final outcome: AUROC 0.857, Process F1 0.288
+- prefix TF-IDF: AUROC 0.751, Process F1 0.274 (C=10, trace-equal training weights)
+- structural metadata: AUROC 0.776, Process F1 0.168 (C=10, trace-equal training weights)
+- metadata plus final outcome: AUROC 0.854, Process F1 0.262 (C=1, trace-equal training weights)
+- joint text + metadata: AUROC 0.810, Process F1 0.210 (C=1, trace-equal training weights)
+- joint text + metadata + outcome: AUROC 0.874, Process F1 0.294 (C=1, trace-equal training weights)
 
 
 ## Trace-equal weighting
@@ -61,6 +68,11 @@ Boundary-weighted AUROC was 0.866; assigning every trace equal
 total weight gave 0.867 (difference
 +0.001, 95% interval [-0.007,
 +0.010]).
+
+
+## Environment
+
+Python 3.13.7, numpy 2.5.2, pandas 2.3.3, scipy 1.18.1, scikit-learn 1.9.0.
 
 
 ## Files

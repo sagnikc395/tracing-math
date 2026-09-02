@@ -1,405 +1,469 @@
-# Workshop-specific critique of “Decodability Is Not Localization”
+# Critique of "Decodability Is Not Localization"
 
-## Bottom line
+## Scope of this critique
 
-This revision is substantially stronger than the earlier manuscript and is a good thematic match
-for the NeurIPS 2026 **Interpretability for Discovery** workshop. The workshop explicitly welcomes
-failure cases and negative results, including misleading interpretations, failed validation, and
-practical limits on reliable discovery. That is now the paper’s central contribution: high
-invalid-prefix AUROC can coexist with nuisance predictability, poor onset localization,
-calibration failures, and no validated causal evidence.
+This is an independent critique of `paper/neurips_2026.pdf`, not a rebuttal to supplied reviews.
+No reviewer comments, scores, confidence ratings, or rebuttal deadline were provided. I therefore
+use the concern-ranking and evidence-diagnosis structure from `SKILL2.md`, but I do not infer
+reviewer intent or assess rebuttal viability.
 
-The paper is now scientifically defensible as a careful audit or negative-result case study. Its
-main remaining weakness is not overclaiming but identification: the added controls still do not
-measure the hidden state’s incremental information over the strongest jointly available nuisance
-predictor. Prefix text, structural metadata, and final-answer outcome are fitted separately, and
-the new shortcut models use a fixed logistic regularization value while the hidden-state probe
-receives validation-based regularization selection. Because outcome-aware metadata already reaches
-AUROC 0.857 versus 0.866 for the hidden state, that comparison needs to be maximally fair.
+The paper is best judged as a NeurIPS **Negative Results** submission. The NeurIPS 2026 guidelines
+set a high bar for that contribution type: the negative result should rest on deeper analysis, change
+how researchers approach an important question, and be surprising rather than merely report that an
+experiment failed. This manuscript has the right shape for that category. It distinguishes
+decodability, localization, nuisance predictability, transfer, calibration, and causal use; it also
+reports a failed behavioral assay without turning the failure into a causal conclusion. The current
+version nevertheless has two blocking problems. Table 2 and the prose disagree about the
+localization metrics, and the central claim of "no incremental pooled information" is not tested by
+the reported comparison.
 
-The onset evidence remains exploratory on an already inspected split, and the study covers only
-one small model and one benchmark construction. For this workshop, those limitations are less
-damaging than they would be for a main-track universality claim because the call explicitly values
-careful negative case studies. My provisional scientific recommendation is therefore **weak
-accept**, with meaningful upside if the baseline comparison is made fully fair.
+My provisional assessment is **borderline reject (3/6)** with high confidence. This is not because
+the paper reports a negative result or studies one model. The immediate reason is correctness: the
+main table mixes estimands, the abstract makes an unsupported error-overlap claim, Section 4.1
+reverses the aggregate correct-rejection comparison, and equal performance of two separate
+classifiers does not establish conditional or incremental information. If those errors are
+fixed and a nuisance-plus-hidden comparison confirms the intended conclusion on data not used to
+design the post-hoc audit, the paper could move to borderline accept or accept.
 
-The exact PDF is not yet submission-compliant, however. The workshop allows **five pages of main
-text**, while this manuscript’s main text continues onto page 6 before the references begin. That
-is a formatting blocker independent of the scientific recommendation.
+## Paper claim map
 
-## Workshop fit and submission compliance
+- **Problem.** Determine whether a hidden-state probe detects the first invalid step in a
+  mathematical trace or exploits easier correlates of an already-invalid prefix.
+- **Primary empirical object.** Residual-stream states from Qwen2.5-Math-1.5B-Instruct at written
+  step boundaries for 3,360 retained ProcessBench traces.
+- **Main predictive result.** A linear hidden-state probe reaches held-out boundary AUROC 0.866 for
+  the persistent *invalid-so-far* target.
+- **Main negative claim.** An equally tuned joint text, metadata, and final-outcome predictor reaches
+  AUROC 0.874, so the manuscript says the hidden state has no incremental pooled-ranking
+  information over nuisance features.
+- **Narrow positive claim.** The hidden score has better thresholded onset localization than the
+  strongest joint control, although absolute localization remains poor.
+- **Exploratory claim.** A matched transition probe detects an onset-related representation change
+  with AUROC 0.769 on an already inspected split.
+- **Causal claim.** None. Two verdict readouts fail their validity gates, so the intervention is
+  uninterpretable.
+- **Claimed scope.** One model, one benchmark construction, and one frozen split; the paper presents
+  an existence proof rather than a prevalence estimate.
+- **Acceptance-critical claim.** High hidden-state AUROC can survive within-trace centering and
+  source transfer while failing stronger tests of unique information, precise localization, stable
+  calibration, and behavioral use.
 
-The official [workshop scope](https://interpretability4discovery.github.io/about.html) asks how
-interpretability can turn internal representations into actionable, testable knowledge and lists
-four topic areas. This paper fits most directly under **“Failure cases and negative results”**:
-it shows that a compelling linear representation can be confounded by metadata, poorly localized,
-miscalibrated, and unusable in a failed behavioral assay. It also contributes to the workshop’s
-interest in evaluation frameworks that determine when interpretability supports reliable
-discovery.
+## What the paper does well
 
-The fit is real but under-articulated. The paper is currently framed around hidden-state verifiers
-for mathematical reasoning, not around the epistemic validation problem posed by the workshop. A
-reviewer should be able to infer the connection, but the Introduction and Conclusion should state
-it directly: *decodability is a candidate-discovery step, while nuisance controls, localization,
-and causal or behavioral validation determine whether the decoded pattern can count as reliable
-new knowledge.*
+The manuscript is unusually candid. It states that the persistent label is not an onset label,
+labels the transition analysis post-hoc, reports that the test set was already inspected, quantifies
+matching reuse and residual imbalance, and refuses to interpret the failed intervention. Those
+choices make the evidence easier to audit.
 
-The official [call for papers](https://interpretability4discovery.github.io/cfp.html) establishes
-the following submission checks:
+The experimental accounting is also strong. The paper gives attempted and retained trace counts,
+complete-trace exclusions, boundary counts, split proportions, the grouping rule, model and layer
+dimensions, the regularization grid, threshold selection, bootstrap units, hardware, package
+versions, a dataset hash, and reproduction commands. Whole-trace paired intervals are appropriate
+for comparisons made on repeated boundaries from the same traces.
 
-- **Five-page main-text limit:** not satisfied by the current PDF; the final two main-text
-  paragraphs appear on page 6. References and appendices do not count.
-- **Main text must be self-contained:** largely satisfied. The acceptance-critical metrics,
-  controls, and limitations are in the main text.
-- **Double blind:** satisfied in the manuscript. The linked supplement must also remove names,
-  usernames, and identifying repository metadata.
-- **Responsible-use statement:** satisfied. The paper names false-alarm, late-detection, grading,
-  and distribution-shift risks and recommends human or formal verification.
-- **Reproducibility and code availability:** partly satisfied. Commands and artifact identity are
-  reported, but the checklist acknowledges missing compute accounting and license details.
-- **Non-archival/private review:** no issue is visible in the PDF, but authors should confirm that
-  the OpenReview submission and any linked materials remain private during review.
+The paper separates several questions that probe papers often blur. Boundary ranking, exact onset
+localization, correct-trace rejection, source transfer, and causal use are reported as different
+estimands. The absolute localization results are not hidden: exact erroneous-trace localization is
+28.9%, 38.8% of correct traces trigger an alarm, and detected errors are late by 0.59 steps on
+average. The source-transfer claim is also restrained to ProcessBench sources rather than models or
+datasets.
 
-The workshop site currently lists a submission deadline of **September 2, 2026, 11:59:59 PM AoE**
-and permits an extra main-text page only after acceptance. The page-limit fix therefore belongs in
-the submission version, not the camera-ready plan.
-
-## Summary of the contribution
-
-The paper analyzes residual-stream states from Qwen2.5-Math-1.5B-Instruct at written-step
-boundaries in ProcessBench. A linear probe predicts a persistent *invalid-so-far* target and reaches
-test AUROC 0.866. Prefix TF–IDF reaches 0.760, structural metadata reaches 0.780, and structural
-metadata augmented with final-answer correctness reaches 0.857. The hidden-state probe retains a
-larger advantage on thresholded trace localization: Process F1 is 0.393 versus 0.288 for the
-outcome-aware metadata model.
-
-Operational localization remains weak. Exact first-error accuracy is 28.9%, detections are late by
-0.59 steps on average, and 38.8% of fully correct traces trigger a false alarm. A post-hoc matched
-transition probe obtains AUROC 0.769, suggesting an onset-related representation change, while two
-behavioral readouts rank valid and invalid prefixes below chance. The paper therefore concludes
-that decodability, localization, calibration, and causal use are distinct.
-
-## What the revision now does well
-
-- **The claim matches the target.** The title, abstract, introduction, and conclusion consistently
-  describe a model-specific audit rather than an internal “knowledge” result.
-- **The shortcut result is not hidden.** The abstract foregrounds that outcome-aware metadata nearly
-  matches hidden-state AUROC, including the paired confidence interval around the difference.
-- **The paper separates estimands.** Boundary AUROC, trace-level localization, source transfer, and
-  behavioral use are treated as different questions.
-- **The onset protocol is now auditable.** Section 3.4 reports the transition construction, frozen
-  partitions, class balance, pair counts, model-selection rule, controls, and clustered bootstrap.
-- **Statistical reporting is much improved.** Probe-control differences are paired by trace, the
-  different bootstrap draw counts are explained, and trace-equal evaluation is reported.
-- **Data accounting is complete.** The paper provides attempted and retained trace counts,
-  exclusions, boundary counts, error prevalence, per-source accounting, the split seed, and the
-  dataset hash.
-- **Negative evidence is handled correctly.** The causal pilot is explicitly uninterpretable rather
-  than presented as evidence of causal non-use.
-- **Generalization language is restrained.** ProcessBench components are called sources rather than
-  independent mathematical domains, and the conclusion is limited to one model.
-- **Presentation issues are fixed.** The PDF is anonymized, contains the checklist, has no hyperlink
-  boxes, defines the embedding-index comparison, and reports the within-error Process F1 as `N/A`.
-
-## Resolution of the previous major concerns
-
-| Previous concern | Current status | Assessment |
-|---|---|---|
-| Persistent target does not identify onset | **Partially resolved** | The claim is narrowed and the transition protocol is explicit, but onset evidence remains post-hoc and lacks untouched replication. |
-| Shortcut controls were too weak | **Partially resolved** | Prefix, structural, outcome, source, generator, and length audits were added. Joint nuisance prediction and equally tuned baselines are still missing. |
-| Causal assay was invalid | **Conceded and narrowed** | The pilot is correctly gated and described as invalid. No causal claim remains. |
-| One model and benchmark | **Conceded and narrowed** | The title and text name the model and call the work a case study. Scientific generalization remains untested. |
-| Boundary weighting and incomplete reporting | **Mostly resolved** | Data flow and evaluation weighting are reported. The fitted probe is still boundary-weighted, and uncertainty conditions on one split and one selected pipeline. |
-| Novelty relative to hidden-state verifiers | **Partially resolved** | A delta table and precise negative-result claim were added, but the comparison is too compressed to establish a sharp methodological delta. |
+The basic negative-result story is useful. A pooled AUROC of 0.866 looks convincing in isolation;
+showing how much of that performance can be reproduced by text, position, generator, length, and
+final-outcome fields is a good warning against treating probe accuracy as mechanistic evidence.
 
 ## Decision-critical concerns
 
-### C0. The submission exceeds the workshop’s five-page main-text limit
+### C0. Table 2 and the abstract contain incompatible localization claims
 
-**Class:** presentation / submission compliance  
-**Severity:** fatal if enforced administratively  
-**Decision impact:** high  
-**Resolution confidence:** high
+**Class:** `CORRECTNESS`
+**Severity:** `FATAL` until corrected
+**Decision impact:** `HIGH`
+**Resolution confidence:** `HIGH`
+**Best response mode:** `CORRECTION`
 
-The workshop CFP permits up to five pages of main text and excludes only references and
-appendices. In the current PDF, Section 5 continues for two paragraphs at the top of page 6, and the
-references begin afterward on that page. The main text therefore occupies six pages. The CFP grants
-an additional page only to accepted camera-ready papers.
+Section 3.2 defines Process F1 as the harmonic mean of exact error-boundary accuracy among erroneous
+traces and correct-trace rejection. Several Table 2 rows do not satisfy that definition. The clearest
+case is the "Joint + final outcome" row:
 
-**Needed revision:** Remove enough main-text material that the references begin no later than page
-6 with no main-text carryover. The cleanest cut is to move Section 4.4’s failed causal pilot to the
-appendix, shorten the generic related-work prose, and retain one sentence in the main results saying
-that both readouts failed the validity gate. Do not move acceptance-critical shortcut or
-localization evidence out of the self-contained main text.
+- displayed Process F1: 0.294;
+- displayed Exact: 0.430;
+- displayed correct rejection: 0.895;
+- harmonic mean of 0.430 and 0.895: approximately 0.581, not 0.294.
 
-### C1. The strongest nuisance comparison is absent and the added baselines are not equally tuned
+The reported Process F1 of 0.294 is instead compatible with erroneous-trace exact accuracy of about
+0.176 and correct rejection of 0.895. The results prose confirms this: the claimed hidden-minus-joint
+exact-localization difference is 0.113, which equals approximately 0.289 minus 0.176, not 0.289 minus
+the displayed 0.430. The table therefore appears to show complete-trace accuracy in the "Exact"
+column for at least the control rows while showing erroneous-trace exact accuracy for the hidden
+row. A column cannot change meaning by row.
 
-**Class:** fair comparison / empirical support  
-**Severity:** major  
-**Decision impact:** high  
-**Resolution confidence:** high
+The aggregate interpretation is also reversed. Section 4.1 says the joint model "crosses threshold
+on most correct traces." Yet Table 2 gives correct rejection 0.612 for the hidden probe and 0.895 for
+the joint outcome model. Those values imply false-alarm rates of 38.8% and 10.5%, respectively. The
+joint model rejects substantially more correct traces; the hidden model falsely alarms more often.
+The abstract's narrower statement that the hidden probe rejects some traces on which the joint model
+alarms could still be true, but it would require a paired error-overlap analysis that the PDF does not
+report. It cannot be used as the aggregate explanation for the hidden model's Process F1 advantage.
 
-Table 3 compares the hidden probe separately against prefix TF–IDF, structural metadata, and
-metadata plus final-answer correctness. It does not fit the natural strongest baseline: prefix text
-plus structural metadata plus outcome. Separate baselines cannot reveal whether their errors are
-complementary. This matters because the outcome-aware metadata model already reaches AUROC 0.857,
-only 0.009 below the hidden-state probe, with a paired interval that includes zero.
+**Evidence needed to resolve it.** Recompute every displayed localization metric from one frozen
+prediction file and publish a row-level identity check:
 
-The model-selection budgets are also asymmetric. Section 3.2 reports that the hidden-state probe
-selects regularization from four values on validation data. Section 3.3 says the added controls
-select their thresholds on validation, but does not report regularization selection. The
-accompanying implementation fixes those logistic models at `C=1.0`. A nine-point AUROC gap is too
-small to interpret under unequal tuning.
+`Process F1 = 2 * error_exact * correct_rejection / (error_exact + correct_rejection)`.
 
-Final-answer correctness is appropriately called a diagnostic shortcut, but it is an oracle
-benchmark field rather than information necessarily available to an online verifier. The current
-result therefore answers “how predictable is the persistent label from benchmark metadata?” more
-directly than “what validity information is uniquely present in the activation?”
+**Required revision.** Correct Table 2, its caption, the abstract, Section 4.1, and the conclusion
+from the same generated artifact. Use separate columns for erroneous-trace exact accuracy and
+complete-trace accuracy. Add a regression test that fails when the displayed components do not
+reproduce Process F1. No scientific interpretation should be finalized until this audit passes.
 
-**Needed revision:** Fit a joint sparse text-plus-metadata model, with and without final-answer
-correctness, using the same validation regularization budget as the hidden probe. Report hidden
-minus joint-control paired intervals for AUROC, average precision, Process F1, exact erroneous-trace
-localization, and correct rejection. Also report the comparison within final-answer-correctness
-strata. If the hidden-state advantage disappears, make that negative result central; if a
-trace-localization advantage survives, state that narrower incremental claim.
+### C1. Separate predictors do not test incremental information
 
-### C2. The matched transition probe is still exploratory and reuses controls heavily
+**Class:** `CORRECTNESS` / `EMPIRICAL_SUPPORT`
+**Severity:** `MAJOR`, bordering on fatal for the stated central claim
+**Decision impact:** `HIGH`
+**Resolution confidence:** `HIGH`
+**Best response mode:** `NEW_ANALYSIS` and `CLAIM_NARROWING`
 
-**Class:** empirical support / statistical reliability  
-**Severity:** major  
-**Decision impact:** high  
-**Resolution confidence:** medium
+The paper compares a hidden-only classifier with a nuisance-only classifier and observes similar
+AUROC. It then concludes that the hidden state contains "no incremental pooled-ranking information"
+over the nuisances. That conclusion does not follow. Two classifiers can have the same AUROC while
+making different errors. If so, the hidden representation may add substantial information when
+combined with nuisance features.
 
-Section 3.4 is now commendably explicit, and the manuscript clearly says the analysis was designed
-after the primary result. That honesty prevents a false confirmatory claim, but it does not create
-an untouched test. The transition AUROC of 0.769 is the most direct positive evidence that the
-representation changes at the annotated onset, so its exploratory status materially limits the
-paper’s strongest mechanistic interpretation.
+Incremental information requires a nested comparison:
 
-Each error transition is matched independently to the closest correct transition, allowing the
-same correct trace or boundary to be reused many times. The two-way bootstrap accounts for reused
-correct-trace IDs in uncertainty estimation, but duplicated controls also affect model fitting and
-the effective diversity of the classification task. The paper reports 380 held-out pairs but not
-the number of unique control traces, reuse distribution, covariate balance after matching, or
-whether a few controls dominate training.
+1. fit the best nuisance model;
+2. fit the same nuisance model augmented with the hidden representation or a hidden-probe score;
+3. compare both models out of sample under the same selection budget.
 
-**Needed revision:** Freeze the stated transition protocol before collecting an untouched test on a
-second model, dataset, or reserved ProcessBench subset. Report unique controls, reuse counts, and
-standardized covariate differences. Add a sensitivity analysis using one-to-one optimal matching,
-matching with replacement plus inverse-reuse training weights, or both. The result should remain
-explicitly exploratory until replicated.
+The current hidden-versus-nuisance comparison answers whether either feature family predicts the
+target alone. It does not answer whether the hidden state improves prediction conditional on the
+nuisances. Equal tuning budgets do not repair this logical gap.
 
-### C3. The one-model scope limits generality, but does not defeat the workshop contribution
+**Evidence needed to resolve it.** Compare `nuisance` against `nuisance + hidden` for both the
+deployable feature set (prefix text and contemporaneously available metadata) and the diagnostic
+oracle set that includes final-answer correctness. Use grouped out-of-fold predictions or a genuinely
+untouched test set. Report paired differences in AUROC, average precision, log loss, erroneous-trace
+exact accuracy, correct rejection, and Process F1. A calibration-sensitive proper score is important
+because AUROC alone can conceal complementary information.
 
-**Class:** generalization / significance  
-**Severity:** moderate for this workshop  
-**Decision impact:** medium  
-**Resolution confidence:** medium
+**Safe claim with current evidence.** "The strongest nuisance-only predictor matches the hidden-only
+probe in pooled AUROC." Do not use "no incremental information" unless the nested comparison
+supports it.
 
-The paper handles scope correctly: it names Qwen2.5-Math-1.5B-Instruct in the title, calls the work
-a case study, and says cross-source transfer is not cross-model transfer. A single small math-tuned
-model could still have unusually accessible metadata, calibration drift, or a model-specific onset
-geometry. However, the workshop explicitly welcomes careful failure analyses, so one well-audited
-case can be sufficient if the paper presents it as a counterexample to an evaluation inference,
-not as a universal model property.
+### C2. The target model appears to read other models' traces, not monitor its own reasoning
 
-**Needed revision:** For workshop submission, strengthen the wording that this is an existence proof
-of a decodability/localization failure mode and avoid implying prevalence across models. A second
-model would materially strengthen the paper but is better treated as a high-value archival
-follow-up than a prerequisite for this venue. If run later, freeze the persistent, joint-control,
-and transition protocols before evaluating it.
+**Class:** `SCOPE_OR_OVERCLAIM`
+**Severity:** `MAJOR`
+**Decision impact:** `HIGH`
+**Resolution confidence:** `MEDIUM` because the input protocol is underspecified
+**Best response mode:** `CLARIFICATION`, `CLAIM_NARROWING`, or `NEW_EXPERIMENT`
 
-### C4. Trace-equal evaluation does not test trace-equal training, and uncertainty conditions on one split
+The Introduction motivates whether "a solving model's own representation changes when its reasoning
+first goes wrong." Section 3.1 instead starts from ProcessBench traces with a separate generator
+identity, runs Qwen2.5-Math-1.5B-Instruct over the written steps, and records its states. The paper
+does not say that Qwen2.5-Math-1.5B-Instruct generated these traces. The described experiment is a
+teacher-forced hidden-state verifier: Qwen reads a fixed solution written by another generator.
 
-**Class:** statistical reliability / robustness  
-**Severity:** moderate to major  
-**Decision impact:** medium  
-**Resolution confidence:** high
+That distinction changes the scientific interpretation. A reader model may represent textual
+inconsistency without possessing online awareness of an error in its own generation. It also makes
+the behavioral intervention harder to motivate as a test of whether the solver uses the decoded
+direction.
 
-The trace-equal sensitivity analysis reweights the already fitted probe’s evaluation rows. It shows
-that the chosen score’s aggregate AUROC changes little when each trace receives equal test weight.
-It does not test whether the learned direction changes when every trace contributes equal total
-training loss. The primary logistic objective remains boundary-weighted, so long traces influence
-the fitted coefficients more heavily.
+**Author confirmation needed.** State which trace generators produced the evaluated solutions and
+whether any were generated by the exact target checkpoint under the same prompting and decoding
+setup. Also specify the chat template, prompt, boundary token, and whether each prefix is processed
+independently or as one causal pass.
 
-All intervals also condition on one grouped split, one layer-selection outcome, and one threshold.
-Whole-trace test bootstrapping correctly represents sampling uncertainty for the frozen predictor,
-but not sensitivity to the problem-group assignment or full model-selection pipeline. This is
-important because calibration varies sharply with trace length and source.
+**Required revision.** If the target model did not generate the traces, replace "its own reasoning"
+and related self-monitoring language with "its representation while reading a reasoning trace."
+Reframe the behavioral assay as verifier behavior. A stronger follow-up would collect
+Qwen2.5-Math-1.5B-Instruct's own traces and repeat the frozen protocol.
 
-**Needed revision:** Refit the hidden and nuisance probes using inverse-boundary-count sample
-weights and report paired test differences. Add repeated deterministic grouped splits or bootstrap
-the complete training and selection pipeline. At minimum, label existing intervals as conditional
-on the frozen split and fitted pipeline. Add uncertainty for the source-transfer cells if transfer
-remains a main result.
+### C3. The paper treats post-hoc analyses on an inspected test set unevenly
 
-### C5. The paper fits the workshop’s failure-case track, but does not yet explain its discovery lesson
+**Class:** `STATISTICAL_RELIABILITY`
+**Severity:** `MAJOR`
+**Decision impact:** `HIGH`
+**Resolution confidence:** `HIGH`
+**Best response mode:** `NEW_ANALYSIS` or `CLAIM_NARROWING`
 
-**Class:** significance / venue fit  
-**Severity:** moderate  
-**Decision impact:** high  
-**Resolution confidence:** high
+Section 5 says that the transition probe, temporal randomization, shortcut and joint controls,
+trace-equal refits, and subgroup analyses were all designed post-hoc. Section 3.4 correctly calls the
+transition result exploratory because the test set was not untouched when the analysis was conceived.
+The same caution is not applied consistently to Table 2, even though the joint shortcut result now
+drives the abstract and central conclusion.
 
-The workshop is not simply a mechanistic-interpretability venue. Its stated goal is to turn learned
-representations into knowledge that experts can test and validate, and it explicitly asks how to
-distinguish reliable discovery from misleading interpretation. The paper supplies an excellent
-negative example, but its Introduction motivates process verification and model error tracking
-rather than interpretability-supported discovery. Its Conclusion calls the work an auditable
-account of hidden-state verifier scores without extracting a general validation principle.
+Bootstrap intervals quantify resampling uncertainty for frozen predictions. They do not turn an
+analysis designed after inspecting the test result into a confirmatory test, and they do not capture
+split, layer-selection, threshold-selection, or analysis-selection uncertainty. The paper acknowledges
+some of this in Section 5, but the abstract and Section 4.1 read as confirmatory.
 
-This is a framing problem, not a request to manufacture a scientific discovery. The workshop CFP
-explicitly welcomes failed validation and practical limits. The paper’s venue-specific lesson is
-that a linearly decodable pattern is not yet discovered knowledge: one must test nuisance
-predictability, temporal correspondence, calibration, generalization, and behavioral or causal
-validity before translating a representation into a claim about what a model has learned.
+**Evidence needed to resolve it.** Freeze the current protocol and evaluate it on an untouched set,
+or use grouped nested cross-validation that repeats feature selection, regularization selection,
+threshold selection, and evaluation within each outer fold. Repeat the group split over several fixed
+seeds if enough data remain. Until then, label the joint-control result exploratory everywhere, not
+only in the limitations.
 
-**Needed revision:** Add a short paragraph near the end of the Introduction mapping the four audit
-levels to discovery validation. Recast the final paragraph as a concrete checklist for when an
-internal pattern is safe to treat as a candidate discovery. Keep the mathematical case study
-central; do not broaden it into unsupported claims about science. Table 1 can then remain compact,
-although adding columns for controls, localization, and validation would still sharpen novelty.
+### C4. The comparison mixes deployable controls with an oracle future-outcome field
 
-### C6. Reproducibility is much better, but the checklist exposes easy unresolved gaps
+**Class:** `FAIR_COMPARISON` / `SCOPE_OR_OVERCLAIM`
+**Severity:** `MAJOR`
+**Decision impact:** `MEDIUM` to `HIGH`
+**Resolution confidence:** `HIGH`
+**Best response mode:** `NEW_ANALYSIS` and `CLARIFICATION`
 
-**Class:** reproducibility / presentation  
-**Severity:** moderate  
-**Decision impact:** low to medium  
-**Resolution confidence:** high
+The paper is clear that final-answer correctness is a benchmark annotation rather than an online
+signal. That honesty is good, but the result is still allowed to dominate the headline. A boundary
+detector that sees the full trace's reference-checked outcome receives future information that the
+hidden state at the current boundary does not. Calling this comparison "maximally fair" is therefore
+misleading even if model-selection budgets are identical.
 
-Appendix C gives commands, dependency ranges, a dataset hash, seed 42, and A100 usage. The checklist
-nevertheless answers “No” for compute resources and existing-asset licenses. Exact package versions,
-GPU memory, elapsed time, storage, and a total-compute estimate are absent. The paper also asserts
-that an anonymized supplement contains code and resolved configurations; that claim is not
-verifiable from the PDF alone.
+The oracle comparison is useful as a diagnostic: it measures how predictable the persistent label is
+from a feature closely related to whether the completed solution failed. It is not a deployable
+baseline and does not isolate a superficial shortcut available at inference time.
 
-These are not deep scientific flaws, but they are inexpensive to fix and matter for a paper whose
-contribution is methodological auditability. The title page also retains generic “Affiliation / Address
-/ email” placeholders. They do not reveal identity, but a submission-specific anonymous author
-block would look more polished if the style permits it.
+There is a second fairness ambiguity. Table 2's caption says all rows use trace-equal training
+weights, but Section 3.2 describes the hidden probe as class-balanced, while Section 3.3 explicitly
+introduces inverse-boundary-count training weights for the controls. Section 4.1 reports trace-equal
+*evaluation* sensitivity, not a trace-equal hidden-probe refit. The manuscript must say whether the
+hidden row was actually refit with the same trace-equal objective.
 
-**Needed revision:** Freeze and report exact environment versions, A100 memory, approximate wall
-time and storage by stage, and the licenses or terms for ProcessBench, Qwen, and redistributed
-artifacts. Verify that the anonymous supplement executes the stated commands from a clean
-environment. Remove generic title-page placeholders only if doing so remains compliant with the
-official template.
+**Required revision.** Separate the results into:
 
-## Secondary comments
+- deployable contemporaneous baselines, excluding final outcome;
+- diagnostic oracle baselines, including final outcome;
+- conditional models that add hidden features to each baseline.
 
-- Section 4.4 still occupies a main-text subsection, and Figure 1 retains an arrow to the causal
-  pilot. Because neither readout passes the baseline gate, the pilot could move entirely to the
-  appendix unless failed-assay methodology is itself a contribution.
-- Table 3 should show error-boundary accuracy and correct rejection separately. Process F1 can hide
-  that the hidden and outcome-metadata models fail in different ways.
-- “PB” in Table 1 is not defined. Use “ProcessBench” unless space is prohibitive.
-- The main text says the outcome-aware metadata field may be unavailable online. It should also say
-  exactly how final-answer correctness is obtained and whether it depends on a reference answer or
-  benchmark annotation.
-- The source and generator subgroup audit reports trace-level outcomes for the hidden probe, but
-  not hidden-minus-nuisance gaps. The latter would better test whether the hidden-state advantage
-  survives each subgroup.
-- The paper should report how many first errors occur at step 0. Those traces are excluded from the
-  transition task and may differ systematically from the 380 eligible test traces.
-- The transition matching description should state the exact distance function and tier ordering,
-  not only the variables used.
-- Page 8 has substantial unused space. A compact table of exact environment versions, compute, and
-  matching diagnostics would fit without affecting the main-text limit.
+State the training weights for every row. If the hidden model was not refit trace-equally, remove the
+caption's claim or rerun it under matched weighting.
+
+### C5. The text controls are too weak to isolate an internal error representation
+
+**Class:** `MISSING_BASELINE`
+**Severity:** `MODERATE` to `MAJOR`
+**Decision impact:** `MEDIUM`
+**Resolution confidence:** `MEDIUM`
+**Best response mode:** `NEW_EXPERIMENT`
+
+Prefix TF-IDF is a useful lexical baseline, but it is not a strong semantic verifier. The hidden state
+is a contextual nonlinear representation of the same prefix, so a localization advantage over a
+bag-of-words model may reflect ordinary semantic processing rather than an internal variable that
+tracks reasoning validity. Metadata plus final outcome answers a different question and does not
+close this gap.
+
+**Evidence needed to resolve it.** Add at least one text-only semantic baseline that does not access
+the target hidden state: a frozen sentence encoder with a linear head, a small external verifier, or
+an equivalently budgeted model operating on the visible prefix. Also consider output-side signals
+available online, such as token entropy or log-probability summaries. Evaluate the same first-crossing
+metrics and use the same grouped partitions and tuning rules.
+
+This baseline matters most for the surviving localization claim. If a semantic text model matches
+the hidden score's Process F1 or onset jump, the result becomes a limitation of TF-IDF rather than
+evidence for special information in the target model's residual stream.
+
+### C6. "Calibration" is claimed but not evaluated in the PDF
+
+**Class:** `EMPIRICAL_SUPPORT` / `CLARITY`
+**Severity:** `MODERATE`
+**Decision impact:** `MEDIUM`
+**Resolution confidence:** `HIGH`
+**Best response mode:** `NEW_ANALYSIS` or `CLAIM_NARROWING`
+
+The abstract and conclusion list calibration as a distinct validation level, and the Introduction
+states that calibration varies with length and source. The main results report thresholded accuracy
+and subgroup heterogeneity, but no reliability diagram, expected calibration error, Brier score,
+calibration slope/intercept, or group-conditional calibration measure. Threshold transfer and
+probability calibration are related but not interchangeable.
+
+**Required revision.** Define what is meant by calibration. If it means probability calibration,
+report proper scores and reliability plots overall and by source/length on held-out data. If it means
+threshold stability, use that phrase and report how the validation-selected threshold performs under
+each shift. Remove "without ... calibration" from the existence-proof claim unless the selected
+definition is tested.
+
+### C7. The transition result is informative but remains vulnerable to reuse and matching bias
+
+**Class:** `ROBUSTNESS` / `STATISTICAL_RELIABILITY`
+**Severity:** `MODERATE`
+**Decision impact:** `MEDIUM`
+**Resolution confidence:** `HIGH`
+**Best response mode:** `NEW_ANALYSIS`
+
+The transition analysis is the paper's most direct onset evidence, and the manuscript reports its
+limitations clearly. Correct placebos are nevertheless reused up to 46 times, and standardized
+differences of 0.28 for token count and 0.15 for trace length remain after matching. Clustered
+uncertainty handles dependence in evaluation, but it does not remove training bias caused by
+duplicated controls. The analysis also excludes 52 held-out traces whose first error is at step 0.
+
+**Evidence needed to resolve it.** Report one-to-one matching without replacement and
+inverse-reuse-weighted fitting, with covariate balance before and after matching. Treat agreement
+across these specifications as a sensitivity check, not confirmation. Describe step-0 errors
+separately and avoid generalizing transition results to them.
+
+### C8. The novelty case needs a sharper comparison with contemporaneous work
+
+**Class:** `NOVELTY` / `RELATED_WORK`
+**Severity:** `MODERATE`
+**Decision impact:** `MEDIUM`
+**Resolution confidence:** `MEDIUM`
+**Best response mode:** `MANUSCRIPT_REVISION`
+
+Table 1 compares only three hidden-state verifier papers and compresses the delta to supervision,
+scope, onset evaluation, and use tests. The paper's strongest novelty is not any individual tool;
+TF-IDF controls, grouped splits, linear probes, matching, permutation tests, and intervention gates
+are familiar. The novelty must come from the full audit and from a correct negative conclusion.
+
+Two contemporaneous 2026 papers are close enough to discuss in the current version:
+
+- [Where Does Reasoning Break?](https://arxiv.org/abs/2605.13772) directly studies first-error
+  localization through hidden-state transitions and reports cross-model and cross-dataset results.
+- [Hidden Error Awareness in Chain-of-Thought Reasoning](https://arxiv.org/abs/2605.09502) contrasts
+  hidden-state diagnosis with failed causal interventions across several model families.
+
+Under the NeurIPS contemporaneous-work rule, papers posted after March 1, 2026 generally should not
+defeat novelty, but authors are still expected to cite and discuss them. The manuscript should state
+the difference rather than rely on chronology: human first-error labels, nuisance-plus-hidden
+conditional testing, first-crossing metrics, or the handling of failed assays could provide a clear
+delta if executed consistently.
+
+## Internal consistency problem in the conclusion
+
+The final checklist says the candidate "passed (1) only in the negative and failed the rest in
+absolute terms." This does not match the preceding results. The circular-shift test and matched onset
+jump are positive exploratory evidence for temporal correspondence, and the hidden probe reportedly
+has a positive Process F1 difference over the joint outcome model. Conversely, the behavioral assay
+was not a passed or failed causal test; it was invalid because the readout failed its gate.
+
+Replace the single pass/fail sentence with a status table using `SUPPORTED`, `EXPLORATORY`,
+`UNSUPPORTED`, and `NOT TESTED`:
+
+| Validation level | Status supported by the current paper |
+|---|---|
+| Persistent-prefix decodability | Supported on one frozen split |
+| Incremental information over nuisances | Not tested by a nested comparison |
+| Exact localization | Weak in absolute terms |
+| Temporal onset correspondence | Positive but exploratory |
+| Cross-source ranking | Supported within ProcessBench; threshold transfer is unstable |
+| Probability calibration | Not shown in the PDF |
+| Behavioral or causal use | Not tested because the assay was invalid |
+
+## Prioritized experiment and analysis plan
+
+| Priority | Concerns | Underlying question | Minimum viable protocol | Decision value | Cost and negative-result implication |
+|---|---|---|---|---|---|
+| **P0 - must do now** | C0 | Are the headline localization numbers internally consistent? | Generate Table 2 and its prose from one prediction artifact; expose erroneous-trace exact accuracy, correct rejection, complete accuracy, and the derived Process F1; add an arithmetic regression test. | A correctness error in the main table can independently sink the paper. | Low CPU cost. If corrected values weaken the story, narrow the claim. |
+| **P0 - must do now** | C1, C4 | Does the hidden state add information conditional on visible nuisances? | On an untouched outer split or grouped nested CV, compare nuisance versus nuisance-plus-hidden for deployable and oracle feature sets under matched tuning. Report paired AUROC, AP, log loss, and all localization components. | Directly tests the central "incremental information" claim. | Moderate CPU cost if cached states exist. A null result supports the negative claim; a gain requires a narrower, complementary-information story. |
+| **P0 - must do now** | C3 | Does the post-hoc result survive a confirmatory evaluation? | Freeze all choices, rerun the full selection pipeline on a fresh grouped holdout or outer folds, and keep the final fold untouched until analysis code is locked. | Separates a publishable negative result from an exploratory audit of one split. | Moderate CPU cost. Instability means all intervals and conclusions must be described as split-conditional. |
+| **P1 - high value** | C5 | Is the localization advantage specific to internal states rather than contextual text semantics? | Add a text-only semantic verifier and online log-probability/entropy baselines with identical splits, tuning budget, and first-crossing metrics. | Tests the surviving positive interpretation. | Moderate compute. If the text model matches the hidden probe, remove claims of hidden-specific localization value. |
+| **P1 - high value** | C7 | Is the transition result driven by repeated placebos or residual imbalance? | Refit with one-to-one matching and inverse-reuse weights; report unique controls, balance, and paired metrics. | Tests the most onset-specific evidence with existing data. | Low CPU cost. Sensitivity implies the transition AUROC is matching-dependent. |
+| **P1 - high value** | C2 | Does the signal occur during the model's own generation? | Generate traces from the exact target checkpoint under a frozen prompt/decoding protocol, obtain independent first-error annotations, and repeat the audit. | Resolves the verifier-versus-self-monitoring ambiguity. | High GPU and annotation cost. A null result narrows the finding to teacher-forced verification. |
+| **P2 - useful** | C6 | Are scores calibrated, or are thresholds merely unstable? | Report Brier score, log loss, ECE with bin sensitivity, calibration slope/intercept, and reliability plots overall and by source/length. | Supports or removes a repeated claim in the abstract and conclusion. | Low CPU cost. Poor calibration supports the warning; acceptable calibration requires rewriting the claim. |
+| **P3 - defer** | C8 | Does the phenomenon generalize across model families? | Repeat the frozen protocol on at least one different family and one larger checkpoint, with a preregistered analysis manifest. | Raises the significance of an existence proof and tests prevalence. | High GPU cost. Heterogeneity should become the result rather than be averaged away. |
+| **DO NOT RUN** | causal use | Can activation steering change behavior? | Do not interpret another directional intervention until a readout distinguishes valid and invalid baselines and a positive control shows assay sensitivity. | Prevents another uninterpretable causal section. | The failed gate already answers whether the current assay is usable. |
+
+## Clarifications and manuscript repairs that do not require new experiments
+
+1. State whether Qwen generated or only read the ProcessBench traces. Give the exact prompt, chat
+   template, boundary token, and forward-pass construction.
+2. Define every Table 2 metric in the caption and use the same field for every row.
+3. Separate deployable controls from the final-outcome oracle throughout the abstract and results.
+4. Replace "maximally fair" with a factual description of matched tuning and unmatched information
+   availability.
+5. State which analyses were specified before the test set was inspected. Apply the word
+   "exploratory" consistently to every post-hoc result.
+6. Define calibration or remove the term.
+7. Replace the conclusion's binary pass/fail summary with the evidence-status table above.
+8. Expand related work to compare the paper against contemporaneous onset-localization and
+   hidden-awareness studies.
+
+## Preserve, change, and remove or narrow
+
+| Preserve | Change | Remove or narrow |
+|---|---|---|
+| The explicit persistent-target definition | Generate all headline metrics from one artifact | "No incremental information" until a nested model is tested |
+| Problem-grouped splitting and whole-trace paired intervals | Distinguish erroneous-trace exact accuracy from complete accuracy | Section 4.1's claim that the joint model alarms on most correct traces |
+| Full data-flow and reproduction record | Clarify whether the target is a reader or generator | "A solving model's own representation" if traces are externally generated |
+| Honest labeling of post-hoc transition work | Treat all post-hoc test-set analyses consistently | "Poor calibration" without a stated calibration estimand and evidence |
+| The failed-assay validity gate | Separate deployable, oracle, and conditional comparisons | Any causal non-use implication; the causal question remains untested |
+| The one-model scope statement | Explain novelty as a joint audit with a valid conditional test | Universal or prevalence language beyond this model and benchmark |
+
+## Section-level revision plan
+
+### R0 - blocks a defensible submission
+
+- **Abstract:** add paired error-overlap evidence or remove the unsupported correct-trace sentence;
+  remove "incremental information" unless the nested analysis is added.
+- **Section 3.2:** give the exact formulas for erroneous-trace exact accuracy, correct rejection,
+  complete accuracy, and Process F1. State the hidden probe's training weights.
+- **Table 2:** regenerate the table from one schema and add a mechanical consistency check.
+- **Section 4.1:** rewrite the decomposition after the table is corrected. Do not say the joint model
+  alarms on most correct traces if its correct rejection is 0.895.
+- **Conclusion:** replace the final pass/fail claim with qualified evidence states.
+
+### R1 - strongly recommended
+
+- **Experimental design:** add the nuisance-versus-nuisance-plus-hidden comparison on untouched data
+  or in grouped nested cross-validation.
+- **Introduction:** distinguish hidden-state verification of fixed traces from self-monitoring during
+  generation.
+- **Results:** separate online baselines from the final-answer oracle and label every post-hoc result
+  exploratory.
+- **Related work:** add direct comparisons with 2026 onset-localization and diagnostic-versus-causal
+  work.
+
+### R2 - improves completeness
+
+- Add a semantic text-only baseline and calibration results.
+- Add one-to-one and inverse-reuse transition sensitivities.
+- Report uncertainty for source-transfer cells and variability across grouped splits.
+- Move the failed causal pilot to the appendix if space is needed; retain one main-text sentence
+  explaining that the validity gate failed.
+
+### R3 - longer-horizon work
+
+- Collect and annotate self-generated traces from the target model.
+- Replicate the frozen audit on another model family and size.
+- Validate a behavioral readout with positive controls before attempting causal interventions.
 
 ## Questions whose answers could change the assessment
 
-1. Does a jointly tuned prefix-text plus structural-metadata baseline close the remaining AUROC or
-   Process-F1 gap, with and without final-answer correctness?
-2. How many unique correct transitions support the 380 test pairs, how often is each reused, and
-   does one-to-one or inverse-reuse matching reproduce AUROC 0.769?
-3. Does the transition result replicate under the frozen protocol on untouched data or a second
-   model?
-4. Does trace-equal-weighted probe fitting preserve the selected direction, layer, AUROC, and
-   localization metrics?
-5. How much variability arises from the grouped split and model-selection procedure rather than
-   from resampling the frozen test predictions?
-6. Do the hidden-minus-joint-control localization gains hold across source, generator, length, and
-   final-answer-correctness strata?
+1. What exact estimand is shown in the "Exact" column of each Table 2 row, and can the authors
+   provide the arithmetic reconciliation with Process F1?
+2. Does a nuisance-plus-hidden model improve over the nuisance-only model on untouched data,
+   especially in log loss and first-error localization?
+3. Did Qwen2.5-Math-1.5B-Instruct generate any evaluated traces? If not, what behavior is the causal
+   pilot intended to explain?
+4. Were the joint shortcut models and their headline comparison designed only after the original
+   test result was inspected? What data remain genuinely untouched?
+5. Was the hidden probe refit with inverse-boundary-count trace weights, as Table 2's caption appears
+   to claim?
+6. What definition and evidence support the repeated calibration claim?
 
-## Prioritized revision plan
+## Provisional NeurIPS-style assessment
 
-### R0 — Submission blockers and workshop positioning
+| Criterion | Assessment | Reason |
+|---|---|---|
+| Quality | Weak | The design is thoughtful, but the main table is internally inconsistent and the central incremental-information inference is invalid as written. |
+| Clarity | Good | The paper is compact and candid, though the reader-versus-solver protocol, metric names, and calibration language need correction. |
+| Significance | Borderline | The audit could change evaluation practice, but one post-hoc case study must have an airtight central comparison to meet the Negative Results bar. |
+| Originality | Borderline to good | The bundle of controls and failed-assay reporting is useful; contemporaneous work reduces the distinctiveness of localization and diagnostic-versus-causal framing alone. |
+| Overall | **3/6 - Borderline reject** | Correctness and identification concerns currently outweigh the paper's transparency and useful framing. |
+| Confidence | **4/5** | High confidence in the internal arithmetic and design critique; lower confidence in the complete novelty landscape. |
 
-1. Reduce the submission to five main-text pages. Move the failed causal pilot to the appendix and
-   preserve the shortcut and localization results in the main text.
-2. Add a concise discovery-validation paragraph to the Introduction and Conclusion, using the
-   workshop’s own failure-case framing without broadening the empirical claim.
-3. Verify that the manuscript and supplement contain no author names, usernames, repository owner
-   paths, acknowledgments, or other identifying metadata.
-4. Keep the responsible-use statement in the five-page main text; its omission is a stated
-   desk-rejection condition.
+The score could rise to 4/6 if C0 is corrected, the prose is reconciled with the actual metrics, and
+the main claim is narrowed to hidden-only versus nuisance-only parity. It could rise further if an
+untouched nested comparison shows no useful gain from adding hidden features to nuisances. If the
+augmented model improves, the paper can still succeed, but its story must change from absence of
+incremental information to complementarity with weak absolute localization.
 
-### R1 — Highest-value work if it can be completed and verified before submission
+## Policy and author-review note
 
-1. Tune every shortcut model under the same validation budget and fit joint text-plus-metadata
-   baselines, with and without final-answer correctness.
-2. Report hidden-minus-joint-control intervals for exact error localization and correct rejection,
-   not only AUROC and Process F1.
-3. Quantify transition-control reuse and, if inexpensive, add inverse-reuse weighting or one-to-one
-   matching sensitivity.
-4. If these cannot be validated before the deadline, do not add rushed numbers. Narrow the
-   incremental claim and list the comparison as the first camera-ready or follow-up analysis.
-
-### R2 — Camera-ready improvements
-
-1. Use the permitted sixth camera-ready page for joint-control results, matching diagnostics, and
-   fuller reproducibility information rather than restoring generic background.
-2. Add exact versions, compute time, memory, storage, licenses, matching balance, and step-0 counts.
-3. Expand the closest-work table and identify the paper explicitly as an empirical audit of
-   discovery validation.
-
-### R3 — Archival follow-up, not required for workshop fit
-
-1. Replicate persistent decoding and onset localization on a second model under frozen protocols.
-2. Evaluate the transition probe on genuinely untouched data.
-3. Refit with equal total training weight per trace and assess grouped-split/model-selection
-   sensitivity.
-4. Validate a behavioral assay with a positive control before revisiting causal use.
-
-## Time-sensitive submission recommendation
-
-Because the public CFP lists September 2, 2026 as the deadline, prioritize work by failure risk:
-
-1. **First:** cut to five pages, compile, and verify the responsible-use statement and anonymity.
-2. **Second:** add two or three sentences making the workshop failure-case contribution explicit.
-3. **Third:** run the joint baseline only if the protocol and output can be checked before upload.
-4. **Last:** verify the anonymous supplement and OpenReview PDF. Do not spend submission time on a
-   second model or causal rerun.
-
-## Provisional workshop assessment
-
-The public workshop CFP does not publish a numerical review scale or acceptance borderline, so the
-following uses qualitative NeurIPS-style language rather than claiming an official score mapping.
-
-| Criterion | Score | Rationale |
-|---|---:|---|
-| Quality | 3/4 (good) | The design and reporting are careful, but the strongest nuisance baseline is absent, control tuning is asymmetric, and onset evidence remains post-hoc. |
-| Clarity | 4/4 (excellent) | Claims, estimands, negative results, and limitations are unusually explicit; the paper is compact and easy to audit. |
-| Workshop fit | 4/4 (excellent) | The CFP explicitly solicits misleading interpretations, failed validation, and negative results that delimit reliable discovery. |
-| Significance for this workshop | 3/4 (good) | One model limits generality, but a carefully validated counterexample is valuable under the workshop’s stated scope. |
-| Originality | 3/4 (good) | The individual tools are familiar, but the combined decodability/localization/nuisance/causal audit is a distinctive negative-result package. |
-| Scientific recommendation | Weak accept | The paper offers a clear, relevant failure case with unusually honest validation boundaries. The joint-control comparison is the main residual scientific concern. |
-| Submission readiness | Not ready until page limit is fixed | Main text currently spills onto page 6 despite a five-page submission limit. |
-| Confidence | 4/5 | High confidence in the methodological and presentation assessment; novelty confidence is lower without a full independent audit of every related paper. |
-
-The recommendation could move to a clearer accept if an equally tuned joint nuisance model leaves
-a trace-localization advantage. If the joint control closes the gap, the workshop case can still
-remain strong by making the absence of incremental hidden-state evidence the central negative
-finding. Cross-model and untouched-onset replication would strengthen a later archival version but
-are not necessary to establish thematic fit here.
-
-## Use of this critique
-
-This is AI-assisted author-review material, not a venue review or submission-ready rebuttal. The
-author should verify every methodological statement and decide what to adopt. The public workshop
-CFP specifies anonymity, reproducibility, and responsible use but does not state an additional
-workshop-specific generative-assistance rule. Under the current
-[NeurIPS 2026 author policy](https://neurips.cc/Conferences/2026/MainTrackHandbook), authors remain
-responsible for correctness and originality; methodologically important or non-standard agent/LLM
-use should be disclosed where required. Because agent assistance has contributed substantive
-analysis, code, and manuscript revision in this project, the author should confirm whether the
-paper’s current `N/A` checklist response accurately reflects the final workflow rather than assume
-that writing-only treatment applies.
+This document is AI-assisted author-review material, not a venue review or a submission-ready
+rebuttal. The authors should verify every number and interpretation against the underlying artifacts.
+The [NeurIPS 2026 Main Track Handbook](https://neurips.cc/Conferences/2026/MainTrackHandbook)
+allows authors to use tools in preparing and writing a paper, while making the authors responsible
+for correctness and originality. Basic editing assistance need not be documented; important,
+original, or non-standard agent/LLM use in the methodology should be described in the experimental
+setup. The paper's final checklist response should reflect what affected the scientific method, not
+merely the wording of this critique.

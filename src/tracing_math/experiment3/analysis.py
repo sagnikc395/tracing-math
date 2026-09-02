@@ -25,10 +25,112 @@ class FittedProbe:
     c_value: float
 
 
+def transition_matching_diagnostics(metadata: pd.DataFrame) -> pd.DataFrame:
+    """Summarize control reuse and standardized covariate balance after matching.
+
+    The critique's second decision-critical concern (C2) asks how many unique
+    correct traces support the matched pairs, how often each is reused, and
+    whether the matched groups differ on the matching covariates. This table is
+    computed from the matched-transition metadata alone, so it runs without the
+    activation shards.
+    """
+    required = {
+        "pair_id",
+        "role",
+        "onset_trace_id",
+        "placebo_trace_id",
+        "step_fraction",
+        "n_steps",
+        "token_count",
+    }
+    missing = required.difference(metadata.columns)
+    if missing:
+        raise ValueError(f"Missing matching columns: {sorted(missing)}")
+    error_rows = metadata[metadata["role"].eq("error_onset")]
+    placebo_rows = metadata[metadata["role"].eq("correct_placebo")]
+    if error_rows.empty or placebo_rows.empty:
+        raise ValueError("Matching diagnostics need both error and placebo roles")
+
+    reuse = placebo_rows["placebo_trace_id"].value_counts()
+    quantiles = reuse.quantile([0.5, 0.9, 1.0])
+    matched = error_rows.merge(
+        placebo_rows,
+        on="pair_id",
+        suffixes=("_error", "_placebo"),
+        validate="one_to_one",
+    )
+    rows = [
+        {
+            "diagnostic": "pairs",
+            "value": float(len(error_rows)),
+        },
+        {
+            "diagnostic": "unique_placebo_traces",
+            "value": float(reuse.size),
+        },
+        {
+            "diagnostic": "unique_error_traces",
+            "value": float(error_rows["onset_trace_id"].nunique()),
+        },
+        {
+            "diagnostic": "placebo_reuse_median",
+            "value": float(quantiles.loc[0.5]),
+        },
+        {
+            "diagnostic": "placebo_reuse_p90",
+            "value": float(quantiles.loc[0.9]),
+        },
+        {
+            "diagnostic": "placebo_reuse_max",
+            "value": float(quantiles.loc[1.0]),
+        },
+    ]
+    for column in ("step_fraction", "n_steps", "token_count"):
+        error_values = matched[f"{column}_error"].to_numpy(dtype=float)
+        placebo_values = matched[f"{column}_placebo"].to_numpy(dtype=float)
+        difference = error_values - placebo_values
+        pooled_sd = float(np.std(np.concatenate([error_values, placebo_values]), ddof=1))
+        rows.append(
+            {
+                "diagnostic": f"{column}_mean_difference",
+                "value": float(np.mean(difference)),
+            }
+        )
+        rows.append(
+            {
+                "diagnostic": f"{column}_standardized_difference",
+                "value": float(np.mean(difference) / pooled_sd) if pooled_sd > 0 else 0.0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def inverse_reuse_weights(metadata: pd.DataFrame) -> np.ndarray:
+    """Row weights inverse to how often each placebo trace is reused across pairs."""
+    placebo_mask = metadata["role"].eq("correct_placebo")
+    weights = np.ones(len(metadata), dtype=float)
+    reuse = metadata.loc[placebo_mask, "placebo_trace_id"].value_counts()
+    weights[placebo_mask.to_numpy()] = 1.0 / reuse.loc[
+        metadata.loc[placebo_mask, "placebo_trace_id"]
+    ].to_numpy(dtype=float)
+    return weights
+
+
 def build_matched_transition_dataset(
-    activations: np.ndarray, metadata: pd.DataFrame
+    activations: np.ndarray,
+    metadata: pd.DataFrame,
+    *,
+    one_to_one: bool = False,
+    rng_seed: int = 42,
 ) -> tuple[np.ndarray, pd.DataFrame]:
-    """Pair each first-error transition with a similar transition from a correct trace."""
+    """Pair each first-error transition with a similar transition from a correct trace.
+
+    By default each error transition independently selects its closest correct
+    transition, allowing correct traces to be reused. With ``one_to_one`` each
+    correct trace is used at most once per partition (the final matched set
+    drops pairs whose placebo was taken by an earlier error), which is a
+    sensitivity analysis for the reuse concern.
+    """
     if activations.ndim != 3 or len(activations) != len(metadata):
         raise ValueError("Activations must align with metadata and have three dimensions")
     required = {
@@ -65,11 +167,23 @@ def build_matched_transition_dataset(
 
     rows: list[dict[str, object]] = []
     vectors: list[np.ndarray] = []
-    for error in errors.sort_values(["partition", "trace_id"]).itertuples(index=False):
+    used_placebos: set[tuple[str, str]] = set()
+    ordered_errors = errors.sort_values(["partition", "trace_id"])
+    if one_to_one:
+        shuffled_errors = ordered_errors.sample(
+            frac=1.0, random_state=rng_seed
+        )
+    else:
+        shuffled_errors = ordered_errors
+    for error in shuffled_errors.itertuples(index=False):
         candidates = correct[correct["partition"] == error.partition]
         if candidates.empty:
             raise ValueError(f"No correct transition is available in {error.partition}")
-        match = _closest_transition(error, candidates)
+        match = _closest_transition(error, candidates, used_placebos if one_to_one else set())
+        if match is None:
+            continue
+        if one_to_one:
+            used_placebos.add((str(error.partition), str(match.trace_id)))
         pair_id = f"{error.trace_id}:{int(error.step_index)}"
         for label, row, role in ((1, error, "error_onset"), (0, match, "correct_placebo")):
             current = lookup[(str(row.trace_id), int(row.step_index))]
@@ -108,9 +222,16 @@ def fit_transition_probes(
     bootstrap_samples: int,
     confidence_level: float,
     seed: int,
+    inverse_reuse: bool = False,
 ) -> dict[str, object]:
-    """Fit layer-wise onset-transition probes with matched held-out controls."""
+    """Fit layer-wise onset-transition probes with matched held-out controls.
+
+    With ``inverse_reuse``, every placebo row is weighted by one over the number
+    of pairs that reuse its trace during fitting and in the point estimates, so
+    heavily reused correct traces contribute proportionally less.
+    """
     labels = metadata["label"].to_numpy(dtype=int)
+    sample_weights = inverse_reuse_weights(metadata) if inverse_reuse else None
     masks = {
         name: metadata["partition"].eq(name).to_numpy()
         for name in ("train", "validation", "test")
@@ -131,13 +252,28 @@ def fit_transition_probes(
             c_values,
             max_iter,
             seed,
+            sample_weight=(
+                None if sample_weights is None else sample_weights[masks["train"]]
+            ),
         )
         validation_model = _fit_probe(
-            features[masks["train"]], labels[masks["train"]], c_value, max_iter, seed
+            features[masks["train"]],
+            labels[masks["train"]],
+            c_value,
+            max_iter,
+            seed,
+            sample_weight=None if sample_weights is None else sample_weights[masks["train"]],
         )
         validation_scores = _scores(validation_model, features[masks["validation"]])
         fit_mask = masks["train"] | masks["validation"]
-        fitted = _fit_probe(features[fit_mask], labels[fit_mask], c_value, max_iter, seed)
+        fitted = _fit_probe(
+            features[fit_mask],
+            labels[fit_mask],
+            c_value,
+            max_iter,
+            seed,
+            sample_weight=None if sample_weights is None else sample_weights[fit_mask],
+        )
         test_scores = _scores(fitted, features[masks["test"]])
         layer_models[layer] = fitted
         layer_test_scores[layer] = test_scores
@@ -177,6 +313,7 @@ def fit_transition_probes(
         c_values=c_values,
         max_iter=max_iter,
         seed=seed,
+        sample_weight=sample_weights,
     )
     bootstrap = _transition_bootstrap(
         predictions,
@@ -204,6 +341,7 @@ def transition_controls(
     c_values: tuple[float, ...],
     max_iter: int,
     seed: int,
+    sample_weight: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """Evaluate position, current-step lexical, and shuffled-label controls."""
     labels = metadata["label"].to_numpy(dtype=int)
@@ -227,6 +365,7 @@ def transition_controls(
             c_values,
             max_iter,
             seed,
+            None if sample_weight is None else sample_weight[train],
         )
     )
 
@@ -247,6 +386,7 @@ def transition_controls(
             c_values,
             max_iter,
             seed,
+            None if sample_weight is None else sample_weight[train],
         )
     )
 
@@ -265,6 +405,7 @@ def transition_controls(
             c_values,
             max_iter,
             seed,
+            None if sample_weight is None else sample_weight[train],
         )
     )
     return pd.DataFrame(rows)
@@ -363,7 +504,15 @@ def summarize_counterfactual_patching(
     return pd.DataFrame(rows)
 
 
-def _closest_transition(error: object, candidates: pd.DataFrame) -> object:
+def _closest_transition(
+    error: object, candidates: pd.DataFrame, used_placebos: set[tuple[str, str]]
+) -> object | None:
+    """Pick the best unused candidate under tier ordering, then squared distance.
+
+    Tiers prefer same-source-then-same-generator matches. The distance is the
+    sum of relative-position, relative-trace-length, and relative-token-count
+    absolute differences; exact ties break by trace id then step index.
+    """
     work = candidates.copy()
     work["match_tier"] = (
         2 * work["source"].eq(error.source).astype(int)
@@ -375,14 +524,23 @@ def _closest_transition(error: object, candidates: pd.DataFrame) -> object:
         + (work["token_count"] - int(error.token_count)).abs()
         / max(int(error.token_count), 1)
     )
-    return work.sort_values(
+    work = work.sort_values(
         ["match_tier", "distance", "trace_id", "step_index"],
         ascending=[False, True, True, True],
-    ).iloc[0]
+    )
+    for row in work.itertuples(index=False):
+        if (str(row.partition), str(row.trace_id)) not in used_placebos:
+            return row
+    return None
 
 
 def _fit_probe(
-    features: object, labels: np.ndarray, c_value: float, max_iter: int, seed: int
+    features: object,
+    labels: np.ndarray,
+    c_value: float,
+    max_iter: int,
+    seed: int,
+    sample_weight: np.ndarray | None = None,
 ) -> FittedProbe:
     scaler = StandardScaler(with_mean=not hasattr(features, "tocsr"))
     scaled = scaler.fit_transform(features)
@@ -392,7 +550,11 @@ def _fit_probe(
         max_iter=max_iter,
         solver="liblinear",
         random_state=seed,
-    ).fit(scaled, labels)
+    )
+    if sample_weight is None:
+        classifier.fit(scaled, labels)
+    else:
+        classifier.fit(scaled, labels, sample_weight=sample_weight)
     return FittedProbe(scaler=scaler, classifier=classifier, c_value=c_value)
 
 
@@ -408,10 +570,13 @@ def _select_c(
     c_values: tuple[float, ...],
     max_iter: int,
     seed: int,
+    sample_weight: np.ndarray | None = None,
 ) -> float:
     ranked = []
     for c_value in c_values:
-        model = _fit_probe(train_features, train_labels, c_value, max_iter, seed)
+        model = _fit_probe(
+            train_features, train_labels, c_value, max_iter, seed, sample_weight=sample_weight
+        )
         scores = _scores(model, validation_features)
         ranked.append((roc_auc_score(validation_labels, scores), -c_value, c_value))
     return float(max(ranked)[2])
@@ -443,6 +608,7 @@ def _control_result(
     c_values: tuple[float, ...],
     max_iter: int,
     seed: int,
+    train_weight: np.ndarray | None = None,
 ) -> dict[str, object]:
     return _control_result_from_splits(
         name,
@@ -456,6 +622,7 @@ def _control_result(
         c_values,
         max_iter,
         seed,
+        train_weight,
     )
 
 
@@ -471,6 +638,7 @@ def _control_result_from_splits(
     c_values: tuple[float, ...],
     max_iter: int,
     seed: int,
+    train_weight: np.ndarray | None = None,
 ) -> dict[str, object]:
     c_value = _select_c(
         train_features,
@@ -480,6 +648,7 @@ def _control_result_from_splits(
         c_values,
         max_iter,
         seed,
+        sample_weight=train_weight,
     )
     if hasattr(train_features, "tocsr"):
         from scipy.sparse import vstack
@@ -488,7 +657,11 @@ def _control_result_from_splits(
     else:
         fit_features = np.concatenate([train_features, validation_features])
     fit_labels = np.concatenate([train_labels, validation_labels])
-    model = _fit_probe(fit_features, fit_labels, c_value, max_iter, seed)
+    if train_weight is not None:
+        fit_weight = np.concatenate([train_weight, np.ones(len(validation_labels))])
+    else:
+        fit_weight = None
+    model = _fit_probe(fit_features, fit_labels, c_value, max_iter, seed, sample_weight=fit_weight)
     scores = _scores(model, test_features)
     return {
         "control": name,

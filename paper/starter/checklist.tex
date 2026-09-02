@@ -50,8 +50,10 @@
     \item {\bf Experimental result reproducibility}
     \item[] Question: Does the paper fully disclose all the information needed to reproduce the main experimental results of the paper to the extent that it affects the main claims and/or conclusions of the paper (regardless of whether the code and data are provided or not)?
     \item[] Answer: \answerYes{}
-    \item[] Justification: Section~3 and Appendix~C specify the split, target, selection protocol,
-    seeds, software ranges, dataset identity, and exact reproduction commands.
+    \item[] Justification: Section~3 and Appendix~D specify the split, target, selection protocol,
+    seeds, locked package versions, dataset identity, and exact reproduction commands. The joint
+    shortcut controls share the hidden probe's validation budget, and the transition-matching
+    protocol is stated with its reuse diagnostics.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
@@ -118,9 +120,11 @@
 
 \item {\bf Experiments compute resources}
     \item[] Question: For each experiment, does the paper provide sufficient information on the computer resources (type of compute workers, memory, time of execution) needed to reproduce the experiments?
-    \item[] Answer: \answerNo{}
-    \item[] Justification: The paper reports one A100 GPU, batch size, precision, and which stages
-    are CPU-capable, but the original run did not preserve complete elapsed-time and memory logs.
+    \item[] Answer: \answerYes{}
+    \item[] Justification: Appendix~D, Table~\ref{tab:compute} records the GPU model, precision,
+    batch size, approximate per-stage compute, and storage footprint. Exact wall-clock logs for
+    the original extraction were not preserved; the paper states the order of magnitude instead of
+    inventing precision.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
@@ -172,9 +176,10 @@
 
 \item {\bf Licenses for existing assets}
     \item[] Question: Are the creators or original owners of assets (e.g., code, data, models), used in the paper, properly credited and are the license and terms of use explicitly mentioned and properly respected?
-    \item[] Answer: \answerNo{}
-    \item[] Justification: The paper credits and cites the ProcessBench dataset and Qwen model, but
-    it does not reproduce every upstream package and benchmark-source license in the manuscript.
+    \item[] Answer: \answerYes{}
+    \item[] Justification: Appendix~D, Table~\ref{tab:compute} records the Apache 2.0 licenses of
+    the ProcessBench dataset and the Qwen model, and notes that the benchmark's constituent
+    sources retain their original terms; the paper also cites both upstream artifacts.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not use existing assets.
@@ -229,6 +234,9 @@
     \item[] Answer: \answerNA{}
     \item[] Justification: The analyzed language model is the experimental subject, not a
     non-standard agent used to generate labels, hypotheses, or core methodological decisions.
+    Agent assistance contributed to code, analysis, and manuscript editing under author direction;
+    the authors verified all reported numbers against repository artifacts and remain responsible
+    for correctness and originality.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the core method development in this research does not involve LLMs as any important, original, or non-standard components.

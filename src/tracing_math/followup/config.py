@@ -21,6 +21,7 @@ class FollowupConfig:
     confidence_level: float = 0.95
     subgroup_min_traces: int = 20
     audit_examples_per_category: int = 12
+    control_c_values: tuple[float, ...] = (0.01, 0.1, 1.0, 10.0)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> FollowupConfig:
@@ -36,7 +37,12 @@ class FollowupConfig:
             bootstrap_samples=int(raw.get("bootstrap_samples", 2_000)),
             confidence_level=float(raw.get("confidence_level", 0.95)),
             subgroup_min_traces=int(raw.get("subgroup_min_traces", 20)),
-            audit_examples_per_category=int(raw.get("audit_examples_per_category", 12)),
+            audit_examples_per_category=int(
+                raw.get("audit_examples_per_category", 12)
+            ),
+            control_c_values=tuple(
+                map(float, raw.get("control_c_values", cls.control_c_values))
+            ),
         )
         config.validate()
         return config
@@ -48,4 +54,6 @@ class FollowupConfig:
             raise ValueError("confidence_level must be between zero and one")
         if self.subgroup_min_traces < 1 or self.audit_examples_per_category < 1:
             raise ValueError("trace and audit sample minima must be positive")
+        if not self.control_c_values or any(value <= 0 for value in self.control_c_values):
+            raise ValueError("control_c_values must be positive")
 

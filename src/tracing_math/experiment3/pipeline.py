@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import average_precision_score, roc_auc_score
 from tqdm.auto import tqdm
 
 from tracing_math.experiment1.data import (
@@ -26,6 +27,7 @@ from tracing_math.experiment3.analysis import (
     build_matched_transition_dataset,
     fit_transition_probes,
     summarize_counterfactual_patching,
+    transition_matching_diagnostics,
 )
 from tracing_math.experiment3.config import ExtendedFollowupConfig
 
@@ -59,6 +61,8 @@ def fit_and_save_transition_probe(config: ExtendedFollowupConfig) -> dict[str, A
     result["controls"].to_csv(output / "controls.csv", index=False)
     result["bootstrap"].to_csv(output / "bootstrap_summary.csv", index=False)
     transition_metadata.to_csv(output / "matched_transitions.csv", index=False)
+    diagnostics = transition_matching_diagnostics(transition_metadata)
+    diagnostics.to_csv(output / "matching_diagnostics.csv", index=False)
     np.savez(
         output / "direction.npz",
         direction=result["direction"],
@@ -75,6 +79,93 @@ def fit_and_save_transition_probe(config: ExtendedFollowupConfig) -> dict[str, A
     }
     _atomic_write_text(output / "summary.json", json.dumps(summary, indent=2))
     return summary
+
+
+def analyze_transition_matching(config: ExtendedFollowupConfig) -> dict[str, Any]:
+    """Compute reuse and balance diagnostics without activation shards."""
+    path = config.output_dir / "transition_probe" / "matched_transitions.csv"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No matched transitions found at {path}; run fit-transition-probe first"
+        )
+    metadata = pd.read_csv(path)
+    diagnostics = transition_matching_diagnostics(metadata)
+    output = config.output_dir / "transition_probe"
+    diagnostics.to_csv(output / "matching_diagnostics.csv", index=False)
+    return {
+        "status": "complete",
+        "analysis_scope": "post_hoc",
+        "diagnostics": {
+            row["diagnostic"]: float(row["value"])
+            for row in diagnostics.to_dict(orient="records")
+        },
+        "updated_at": _utc_now(),
+    }
+
+
+def run_transition_matching_sensitivity(config: ExtendedFollowupConfig) -> dict[str, Any]:
+    """Refit the frozen transition protocol under alternative matching rules.
+
+    Requires activation shards, so this shares the GPU/storage prerequisites of
+    the original transition run. The default-with-reuse result must come from
+    the frozen protocol; one-to-one matching and inverse-reuse weighting are
+    reported only as sensitivity analyses.
+    """
+    activations, metadata = load_activation_shards(config.experiment1_dir)
+    output = config.output_dir / "transition_probe"
+    output.mkdir(parents=True, exist_ok=True)
+    variants: dict[str, dict[str, Any]] = {}
+    for name, one_to_one, inverse_reuse in (
+        ("with_reuse", False, False),
+        ("inverse_reuse_weights", False, True),
+        ("one_to_one", True, False),
+    ):
+        transitions, transition_metadata = build_matched_transition_dataset(
+            activations,
+            metadata,
+            one_to_one=one_to_one,
+            rng_seed=config.seed,
+        )
+        result = fit_transition_probes(
+            transitions,
+            transition_metadata,
+            c_values=config.c_values,
+            max_iter=config.max_iter,
+            bootstrap_samples=config.bootstrap_samples,
+            confidence_level=config.confidence_level,
+            seed=config.seed,
+            inverse_reuse=inverse_reuse,
+        )
+        test = result["predictions"]
+        variants[name] = {
+            "pairs": int(test["pair_id"].nunique()),
+            "selected_layer": int(result["selected_layer"]),
+            "selected_c": float(result["selected_c"]),
+            "auroc": float(
+                roc_auc_score(test["label"].to_numpy(), test["score"].to_numpy())
+            ),
+            "average_precision": float(
+                average_precision_score(test["label"].to_numpy(), test["score"].to_numpy())
+            ),
+            "unique_placebo_traces": int(
+                transition_metadata.loc[
+                    transition_metadata["role"].eq("correct_placebo"), "trace_id"
+                ].nunique()
+            ),
+        }
+    frame = pd.DataFrame(
+        [
+            {"variant": name, **values}
+            for name, values in variants.items()
+        ]
+    )
+    frame.to_csv(output / "matching_sensitivity.csv", index=False)
+    return {
+        "status": "complete",
+        "analysis_scope": "post_hoc",
+        "variants": variants,
+        "updated_at": _utc_now(),
+    }
 
 
 def extract_boundary_control_shards(config: ExtendedFollowupConfig) -> dict[str, int]:

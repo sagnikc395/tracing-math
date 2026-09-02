@@ -101,6 +101,63 @@ Generator-level rows are reported only when at least 20 held-out traces are avai
 These subgroup comparisons are descriptive and post-hoc. They should not be read as a set of
 independent hypothesis tests.
 
+## Equally tuned joint shortcut controls (2026-09-02 addition)
+
+The workshop critique (C1) noted that the original shortcut controls were fit at a fixed
+regularization value and on train data only, while the hidden probe selected C from four values on
+validation and refit on train plus validation. The shortcut analysis now gives every control the
+identical selection budget, refits the selected model on train plus validation, and fits each
+control with sample weights inverse to boundary counts so every trace contributes equal total
+training loss. Two joint baselines combine prefix text, structural metadata, and (in the stronger
+variant) final-answer correctness.
+
+| Control | C | AUROC | Process F1 | Exact | Correct rejection |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Hidden state (frozen) | 0.01 | 0.866 | 0.393 | 0.289 | 0.612 |
+| Prefix TF-IDF | 10.0 | 0.751 | 0.274 | 0.293 | 0.477 |
+| Structural metadata | 10.0 | 0.776 | 0.168 | 0.164 | 0.194 |
+| Metadata plus final outcome | 1.0 | 0.854 | 0.262 | 0.335 | 0.646 |
+| Joint text + metadata | 1.0 | 0.810 | 0.210 | 0.208 | 0.278 |
+| Joint text + metadata + outcome | 1.0 | 0.874 | 0.294 | 0.430 | 0.895 |
+
+Paired whole-trace bootstrap intervals (hidden minus control, 2,000 draws):
+
+| Control | Metric | Difference | 95% interval |
+| --- | --- | ---: | ---: |
+| Joint text + metadata | AUROC | 0.056 | [0.037, 0.073] |
+| Joint text + metadata | Process F1 | 0.183 | [0.136, 0.229] |
+| Joint text + metadata + outcome | AUROC | -0.008 | [-0.028, 0.013] |
+| Joint text + metadata + outcome | Process F1 | 0.099 | [0.040, 0.158] |
+| Joint text + metadata + outcome | Exact error | 0.113 | [0.064, 0.163] |
+| Joint text + metadata + outcome | Correct rejection | -0.283 | [-0.347, -0.218] |
+
+The substantive conclusion changed: under an equally tuned budget, the joint model that combines
+prefix text, structural metadata, and final-answer correctness reaches AUROC 0.874, numerically
+above the hidden state's 0.866, with a paired difference whose interval includes zero. The hidden
+probe's surviving advantage is task-specific: trace-level localization (Process F1 and exact
+first-error accuracy) and a lower false-alarm rate on correct traces than the joint outcome model,
+which crosses threshold on almost every trace. Within final-answer-correctness strata, the hidden
+AUROC advantage is 0.073 [0.039, 0.107] among correct-outcome traces and -0.001 [-0.022, 0.021]
+among incorrect-outcome traces.
+
+Final-answer correctness is a benchmark annotation computed against the reference solution, not an
+online signal; the joint outcome models are diagnostic upper bounds on nuisance predictability,
+not deployable baselines.
+
+## Onset-task eligibility audit (2026-09-02 addition)
+
+The transition analysis requires a noninitial first error. Of the 669 test traces, 52 erroneous
+traces (7.8%) have `first_error == 0` and are excluded from every transition and matched-placebo
+analysis; 380 erroneous traces with a later onset and 237 fully correct traces remain eligible.
+The excluded traces span all four sources. The audit is written to
+`onset_eligibility_audit.csv`.
+
+## Environment record (2026-09-02 addition)
+
+The summary now records the exact software environment of the analysis run (Python, NumPy,
+pandas, SciPy, scikit-learn, matplotlib versions and platform) in `summary.json` and
+`results.md`, addressing the reproducibility checklist gap noted by the critique.
+
 ## Sensitivity of the failed causal assay
 
 Across the six nonzero learned-direction doses, the approximate minimum detectable mean effect at
