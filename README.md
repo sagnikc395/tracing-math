@@ -14,8 +14,8 @@ signal that an argument has gone off the rails and still produce a confident wro
 nothing in its training connected the two. Or it might have no such signal at all and simply be
 pattern-matching on surface features of broken-looking arithmetic.
 
-The interesting version of the question is not "can a probe predict the label" — probes are good at
-predicting labels — but "is there something in the residual stream that tracks *invalidity itself*,
+The interesting version of the question is not "can a probe predict the label" (probes are good at
+predicting labels) but "is there something in the residual stream that tracks *invalidity itself*,
 as opposed to the many things that correlate with it?" Erroneous solutions tend to be longer. They
 tend to use different vocabulary. Errors tend to appear later in a trace than earlier. Any of these
 can carry a probe to a respectable AUROC without the model representing anything about correctness.
@@ -24,12 +24,12 @@ So the project is built around separating the signal from its confounds, and aro
 that get progressively harder to answer:
 
 1. **Is the signal there?** Can a linear read of hidden states predict, at each step boundary,
-   whether the solution has already become invalid — and does it beat matched nuisance baselines
+   whether the solution has already become invalid and whether it beats matched nuisance baselines
    built from position, surface text, and trace length?
 2. **Is it localized?** Does the signal turn on *at* the first error, or does it drift up gradually
    across the trace in a way that would make "detection" mostly an artifact of thresholding?
 3. **Does the model use it?** If you push activations along the decoded direction, does the model's
-   own verdict move — and does it move more than it does along random directions of the same
+   own verdict move and does it move more than it does along random directions of the same
    magnitude?
 
 The third question is the one that would license the word "represents" in a strong sense. The first
@@ -57,7 +57,7 @@ Concretely, the moving parts are:
   and matched-transition probes that compare the activation *difference* at a real error onset
   against the same difference at an arbitrary transition in a correct trace.
 - **Interventions.** Additive steering along the probe direction, gated on a behavioral
-  precondition — if the model's unmodified verdict readout does not separate correct from erroneous
+  precondition: if the model's unmodified verdict readout does not separate correct from erroneous
   prefixes, the intervention stops rather than producing an uninterpretable dose-response curve.
   Random orthogonal directions serve as the control. Counterfactual activation patching is
   implemented and gated on human-verified corrected steps.
