@@ -32,7 +32,7 @@
 
 \begin{abstract}
 A linear probe that decodes ``this reasoning has gone wrong'' from hidden states is often read as
-a discovery about the model. We test how much of that reading survives contact with controls. In
+a discovery about the model. We check how much of that reading holds up under controls. In
 \model{} reading 3,360 \dataset{} traces, a probe on the selected layer predicts the persistent
 \emph{invalid-so-far} target with held-out AUROC $0.866$ [$0.849,0.884$], and adding the hidden
 representation to an equally tuned text-and-metadata model raises AUROC by $0.0587$
@@ -43,12 +43,12 @@ traces. Ranking transfers across the four \dataset{} sources (off-diagonal AUROC
 while the thresholded localization metric does not ($0.055$ to $0.371$). The causal test never
 runs: the model's own error verdict is below chance on the same boundaries (AUROC $0.342$), so the
 steering results are uninterpretable rather than null. None of the three failures is visible in the
-pooled AUROC that a probe result usually reports, and we name the check that catches each one.
+pooled AUROC that a probe result usually reports; we give the check that catches each one.
 \end{abstract}
 
 \section{Introduction}
 
-Interpretability is increasingly used as an instrument of discovery. A probe decodes some property
+Interpretability is increasingly used as a discovery tool. A probe decodes some property
 from hidden states, and the reported finding is a fact about the model: it represents this, it
 tracks that. ``The model represents whether its own reasoning has become invalid'' is a claim of
 that shape, and it is an appealing one. It promises a cheap step-level verifier and a story about
@@ -67,8 +67,9 @@ cross its threshold \emph{at} the error. With a persistent label, every boundary
 positive, so accumulated evidence and position are enough to score well.
 \item \textbf{Portability of the decision rule.} Ranking and thresholded detection can transfer at
 different rates across data sources.
-\item \textbf{Causal use.} Decodable is not used \citep{hewitt2019control,belinkov2022probing,%
-elazar2021amnesic}. Testing use requires a behavioral readout that works before it is perturbed.
+\item \textbf{Causal use.} Decodability does not imply use
+\citep{hewitt2019control,belinkov2022probing,elazar2021amnesic}. Testing use requires a behavioral
+readout that works before it is perturbed.
 \end{enumerate}
 
 We ran all four checks on one system: \model{} \citep{yang2024qwenmath} reading 3,360 human-annotated
@@ -77,12 +78,12 @@ mathematical reasoning traces from \dataset{} \citep{zheng2025processbench}. Che
 its reasoning is worse than chance on the boundaries we would have intervened on, and we report
 that as a failed precondition rather than as a null effect.
 
-The point of the exercise is not the model. It is that all four failures are compatible with the
+The model here is a test case. The point is that all four failures are compatible with the
 headline number. Pooled AUROC of $0.866$ is reported the same way whether or not a text baseline
 reaches $0.810$, whether the threshold fires early or late, and whether the model's behavior
 responds to the direction. An interpretability result read as a discovery needs the checks that
-separate those cases. Here they all run on cached activations and stored predictions, on CPU, and
-they change what the study is allowed to say.
+separate those cases. Here every check runs on cached activations and stored predictions, on CPU, and
+together they change what the study is allowed to say.
 
 \section{Related work}
 
@@ -98,8 +99,8 @@ for test-time scaling and STEP prunes traces with a hidden-state scorer
 detection with hidden-state transport geometry across models and datasets.
 \citet{yuan2026hiddenerror} separate diagnostic error awareness from causal use across several
 models. Our scope is narrower than any of these and our target is different: we hold the model and
-benchmark fixed and vary the evidential standard, so that the gap between a decoding result and a
-localization or causal result is measured on one set of predictions rather than argued.
+benchmark fixed and vary the evidential standard, so we measure the gap between a decoding result
+and a localization or causal result on one set of predictions instead of arguing for it.
 
 \section{Setup}
 \label{sec:setup}
@@ -133,8 +134,8 @@ current boundary. Structural metadata sees source, generator, absolute and fract
 trace length, and token count. A post-hoc semantic control encodes the same visible prefix with
 mean-pooled \texttt{all-MiniLM-L6-v2} embeddings under the same fitting procedure; its saved record
 does not pin an encoder revision or keep paired bootstrap draws, so we report point estimates.
-Final-answer correctness is a benchmark annotation that no online detector would have, so models
-using it are labeled diagnostic and never treated as baselines.
+Final-answer correctness is a benchmark annotation that no online detector would have, so we label
+models that use it diagnostic and never treat them as baselines.
 
 \paragraph{Post-hoc analyses.}
 The temporal, boundary-location, transition, and semantic-baseline analyses were designed after the
@@ -171,7 +172,7 @@ features plus the full selected-layer hidden representation. Adding $H$ improves
 [$0.0414,0.0745$], log loss by $-0.0798$ [$-0.1038,-0.0548$], and Process F1 by $+0.1866$
 [$0.1397,0.2340$]. Adding $H$ on top of the diagnostic feature set that already contains
 final-answer correctness still improves AUROC by $0.0348$ [$0.0242,0.0451$]. Both intervals exclude
-zero on this split. Check 1 passes, with the size of the gain worth noting: a tuned bag of words
+zero on this split. Check 1 passes, though the gain is modest: a tuned bag of words
 and six pieces of trace metadata recover most of what the probe recovers.
 
 \begin{table}[t]
@@ -206,17 +207,16 @@ plus metadata and by $.0348$ [$.0242,.0451$] over text, metadata, and final answ
 Within an erroneous trace, the probe orders boundaries almost perfectly: mean within-trace AUROC is
 $0.968$ [$0.958,0.976$] over the 380 test traces whose first error is not at step 0. Any score that
 rises with step index would rank well on that measure, so it is not evidence about the
-representation. It is the ceiling that the decision rule built from the same scores fails to reach.
-That rule names the exact first-error step in $28.9\%$ of
-erroneous traces, lands within one step in $59.3\%$, and within two in $72.7\%$. It crosses at all
-on $88.7\%$ of erroneous traces and also crosses on $38.8\%$ of fully correct ones. Among detected
-traces the mean signed error is $+0.59$ steps [$+0.36,+0.80$]: the crossing comes after the
-annotation, not before it.
+representation. It sets a ceiling that the decision rule built from the same scores does not reach.
+That rule names the exact first-error step in $28.9\%$ of erroneous traces, lands within one step in
+$59.3\%$, and within two in $72.7\%$. It crosses at all on $88.7\%$ of erroneous traces and also
+crosses on $38.8\%$ of fully correct ones. Among detected traces the mean signed error is $+0.59$
+steps [$+0.36,+0.80$]: the crossing comes after the annotation, not before it.
 
 Figure~\ref{fig:gap} (center) shows why. The mean score rises from $0.341$ one step before the
 annotated error to $0.559$ at the onset, $0.680$ one step later, and $0.731$ two steps later. At
-the onset the average trace is still below the operating threshold. The signal is a ramp, not an
-event, and a fixed threshold on a ramp fires late.
+the onset the average trace is still below the operating threshold. The score ramps up across
+several steps around the error, and a fixed threshold on a ramp crosses late.
 
 The alignment to the annotation is nonetheless real. Circularly shifting each frozen score
 trajectory 5{,}000 times, which preserves its values and destroys its alignment, gives a null exact
@@ -224,11 +224,11 @@ rate of $0.164$ [$0.137,0.192$] against the observed $0.289$ ($p=0.0002$), and a
 $0.259$ against the observed $0.393$ ($p=0.0002$). Comparing the score jump at a noninitial first
 error with the jump at a transition in a correct trace matched on source, generator, relative
 position, trace length, and token count gives $0.257$ against $0.113$, a paired difference of
-$0.144$ [$0.096,0.193$]. Correct traces drift upward too, which is the same ramp seen without an
-error to explain it.
+$0.144$ [$0.096,0.193$]. Correct traces drift upward too: the same ramp, with no error to explain
+it.
 
-Two robustness checks are flat. Choosing thresholds per length bucket moves Process F1 from $0.393$
-to $0.377$ and correct-trace rejection from $0.612$ to $0.540$, leaving exact localization
+Two robustness checks move little. Choosing thresholds per length bucket moves Process F1 from
+$0.393$ to $0.377$ and correct-trace rejection from $0.612$ to $0.540$, leaving exact localization
 unchanged. Reading states at the last natural token of each step rather than at the artificial step
 marker changes AUROC by $+0.002$ [$-0.007,+0.011$] and Process F1 by $+0.026$ [$-0.020,+0.075$], so
 the result is not an artifact of the boundary token.
@@ -254,12 +254,13 @@ than chance at the task the intervention would have measured. An earlier single-
 versus INCORRECT readout was worse, at AUROC $0.283$ and specificity zero.
 
 The pipeline gates the causal analysis on that readout clearing AUROC $0.5$ with nonzero
-specificity, so the intervention is reported as an assay diagnostic. We moved the boundary state
+specificity, so we report the intervention as an assay diagnostic. We moved the boundary state
 along the probe direction at $\alpha\in\{-4,-2,-1,0,1,2,4\}$ projection standard deviations and
 also along 20 random orthogonal directions at the extreme doses; every learned-direction interval
 includes zero, with a smallest detectable effect of $0.0029$ at 80\% power. None of that is
-evidence about the model. A flat dose-response curve on a broken instrument is uninformative, and
-reporting it as a null result would be the mistake the gate exists to prevent.
+evidence about the model. With the readout below chance, flat curves say nothing about whether the
+model uses the direction, and calling them a null result would report a broken measurement as an
+answer.
 
 \paragraph{An exploratory positive.}
 A probe on the onset difference $h_{i,e_i}-h_{i,e_i-1}$ separates error onsets from matched correct
@@ -291,8 +292,8 @@ are easy to include by accident and hard to notice afterward.
 
 \textbf{Gate causal claims on assay validity.} We could have run the steering experiment, found
 flat curves, and written that the direction is decoded but unused. The readout was below chance, so
-that sentence would have had no support. Checking the instrument before interpreting its output
-turned a publishable null into an honest gap.
+that sentence would have had no support. Checking the readout first left us with a gap in the
+evidence instead of a false null.
 
 \section{Limitations}
 
