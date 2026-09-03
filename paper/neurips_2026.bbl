@@ -1,0 +1,160 @@
+\begin{thebibliography}{16}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Alvarez and Baheri(2026)]{alvarez2026reasoningbreak}
+Tyler Alvarez and Ali Baheri.
+\newblock Where does reasoning break? step-level hallucination detection via
+  hidden-state transport geometry.
+\newblock \emph{arXiv preprint arXiv:2605.13772}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2605.13772}.
+
+\bibitem[Belinkov(2022)]{belinkov2022probing}
+Yonatan Belinkov.
+\newblock Probing classifiers: Promises, shortcomings, and advances.
+\newblock \emph{Computational Linguistics}, 48\penalty0 (1):\penalty0 207--219,
+  2022.
+\newblock \doi{10.1162/coli_a_00422}.
+
+\bibitem[Cobbe et~al.(2021)Cobbe, Kosaraju, Bavarian, Chen, Jun, Kaiser,
+  Plappert, Tworek, Hilton, Nakano, Hesse, and Schulman]{cobbe2021verifiers}
+Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark Chen, Heewoo Jun, Lukasz
+  Kaiser, Matthias Plappert, Jerry Tworek, Jacob Hilton, Reiichiro Nakano,
+  Christopher Hesse, and John Schulman.
+\newblock Training verifiers to solve math word problems.
+\newblock \emph{arXiv preprint arXiv:2110.14168}, 2021.
+\newblock URL \url{https://arxiv.org/abs/2110.14168}.
+
+\bibitem[Elazar et~al.(2021)Elazar, Ravfogel, Jacovi, and
+  Goldberg]{elazar2021amnesic}
+Yanai Elazar, Shauli Ravfogel, Alon Jacovi, and Yoav Goldberg.
+\newblock Amnesic probing: Behavioral explanation with amnesic counterfactuals.
+\newblock \emph{Transactions of the Association for Computational Linguistics},
+  9:\penalty0 160--175, 2021.
+\newblock \doi{10.1162/tacl_a_00359}.
+\newblock URL \url{https://aclanthology.org/2021.tacl-1.10/}.
+
+\bibitem[Gao et~al.(2024)Gao, Song, Yang, Cai, Miao, Dong, Li, Ma, Chen, Xu,
+  Tang, Wang, Zan, Quan, Zhang, Sha, Zhang, Ren, Liu, and
+  Chang]{gao2024omnimath}
+Bofei Gao, Feifan Song, Zhe Yang, Zefan Cai, Yibo Miao, Qingxiu Dong, Lei Li,
+  Chenghao Ma, Liang Chen, Runxin Xu, Zhengyang Tang, Benyou Wang, Daoguang
+  Zan, Shanghaoran Quan, Ge~Zhang, Lei Sha, Yichang Zhang, Xuancheng Ren,
+  Tianyu Liu, and Baobao Chang.
+\newblock {Omni-MATH}: A universal olympiad-level mathematics benchmark for
+  large language models.
+\newblock \emph{arXiv preprint arXiv:2410.07985}, 2024.
+\newblock URL \url{https://arxiv.org/abs/2410.07985}.
+
+\bibitem[He et~al.(2024)He, Luo, Bai, Hu, Thai, Shen, Hu, Han, Huang, Zhang,
+  Liu, Qi, Liu, and Sun]{he2024olympiadbench}
+Chaoqun He, Renjie Luo, Yuzhuo Bai, Shengding Hu, Zhen~Leng Thai, Junhao Shen,
+  Jinyi Hu, Xu~Han, Yujie Huang, Yuxiang Zhang, Jie Liu, Lei Qi, Zhiyuan Liu,
+  and Maosong Sun.
+\newblock {OlympiadBench}: A challenging benchmark for promoting {AGI} with
+  olympiad-level bilingual multimodal scientific problems.
+\newblock \emph{arXiv preprint arXiv:2402.14008}, 2024.
+\newblock URL \url{https://arxiv.org/abs/2402.14008}.
+
+\bibitem[Hendrycks et~al.(2021)Hendrycks, Burns, Kadavath, Arora, Basart, Tang,
+  Song, and Steinhardt]{hendrycks2021math}
+Dan Hendrycks, Collin Burns, Saurav Kadavath, Akul Arora, Steven Basart, Eric
+  Tang, Dawn Song, and Jacob Steinhardt.
+\newblock Measuring mathematical problem solving with the {MATH} dataset.
+\newblock \emph{arXiv preprint arXiv:2103.03874}, 2021.
+\newblock URL \url{https://arxiv.org/abs/2103.03874}.
+
+\bibitem[Hewitt and Liang(2019)]{hewitt2019control}
+John Hewitt and Percy Liang.
+\newblock Designing and interpreting probes with control tasks.
+\newblock In \emph{Proceedings of the 2019 Conference on Empirical Methods in
+  Natural Language Processing and the 9th International Joint Conference on
+  Natural Language Processing}, pages 2733--2743. Association for Computational
+  Linguistics, 2019.
+\newblock \doi{10.18653/v1/D19-1275}.
+\newblock URL \url{https://aclanthology.org/D19-1275/}.
+
+\bibitem[Li et~al.(2023)Li, Lin, Zhang, Fu, Chen, Lou, and
+  Chen]{li2023stepaware}
+Yifei Li, Zeqi Lin, Shizhuo Zhang, Qiang Fu, Bei Chen, Jian-Guang Lou, and
+  Weizhu Chen.
+\newblock Making language models better reasoners with step-aware verifier.
+\newblock In \emph{Proceedings of the 61st Annual Meeting of the Association
+  for Computational Linguistics}, pages 5315--5333. Association for
+  Computational Linguistics, 2023.
+\newblock \doi{10.18653/v1/2023.acl-long.291}.
+\newblock URL \url{https://aclanthology.org/2023.acl-long.291/}.
+
+\bibitem[Liang et~al.(2026)Liang, Huang, Wang, and
+  Zhang]{liang2026earlysignals}
+Zhixiang Liang, Beichen Huang, Zheng Wang, and Minjia Zhang.
+\newblock Hidden states as early signals: Step-level trace evaluation and
+  pruning for efficient test-time scaling.
+\newblock In \emph{Findings of the Association for Computational Linguistics:
+  ACL 2026}, pages 26800--26813. Association for Computational Linguistics,
+  2026.
+\newblock \doi{10.18653/v1/2026.findings-acl.1336}.
+\newblock URL \url{https://aclanthology.org/2026.findings-acl.1336/}.
+
+\bibitem[Lightman et~al.(2023)Lightman, Kosaraju, Burda, Edwards, Baker, Lee,
+  Leike, Schulman, Sutskever, and Cobbe]{lightman2023verify}
+Hunter Lightman, Vineet Kosaraju, Yura Burda, Harri Edwards, Bowen Baker, Teddy
+  Lee, Jan Leike, John Schulman, Ilya Sutskever, and Karl Cobbe.
+\newblock Let's verify step by step.
+\newblock \emph{arXiv preprint arXiv:2305.20050}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2305.20050}.
+
+\bibitem[Ni et~al.(2026)Ni, Fadeeva, Wu, Akhtar, Zhang, Ash, Leippold, Baldwin,
+  Ng, Shelmanov, and Sachan]{ni2026reprobe}
+Jingwei Ni, Ekaterina Fadeeva, Tianyi Wu, Mubashara Akhtar, Jiaheng Zhang,
+  Elliott Ash, Markus Leippold, Timothy Baldwin, See-Kiong Ng, Artem Shelmanov,
+  and Mrinmaya Sachan.
+\newblock {ReProbe}: Efficient test-time scaling of multi-step reasoning by
+  probing internal states of large language models.
+\newblock In \emph{Proceedings of the 64th Annual Meeting of the Association
+  for Computational Linguistics}, pages 11667--11689. Association for
+  Computational Linguistics, 2026.
+\newblock \doi{10.18653/v1/2026.acl-long.536}.
+\newblock URL \url{https://aclanthology.org/2026.acl-long.536/}.
+
+\bibitem[Sun et~al.(2025)Sun, Stolfo, and Sachan]{sun2025arithmetic}
+Yucheng Sun, Alessandro Stolfo, and Mrinmaya Sachan.
+\newblock Probing for arithmetic errors in language models.
+\newblock In \emph{Proceedings of the 2025 Conference on Empirical Methods in
+  Natural Language Processing}, pages 8111--8128. Association for Computational
+  Linguistics, 2025.
+\newblock \doi{10.18653/v1/2025.emnlp-main.411}.
+\newblock URL \url{https://aclanthology.org/2025.emnlp-main.411/}.
+
+\bibitem[Yang et~al.(2024)Yang, Zhang, Hui, Gao, Yu, Li, Liu, Tu, Zhou, Lin,
+  Lu, Xue, Lin, Liu, Ren, and Zhang]{yang2024qwenmath}
+An~Yang, Beichen Zhang, Binyuan Hui, Bofei Gao, Bowen Yu, Chengpeng Li,
+  Dayiheng Liu, Jianhong Tu, Jingren Zhou, Junyang Lin, Keming Lu, Mingfeng
+  Xue, Runji Lin, Tianyu Liu, Xingzhang Ren, and Zhenru Zhang.
+\newblock {Qwen2.5-Math} technical report: Toward mathematical expert model via
+  self-improvement.
+\newblock \emph{arXiv preprint arXiv:2409.12122}, 2024.
+\newblock URL \url{https://arxiv.org/abs/2409.12122}.
+
+\bibitem[Yuan et~al.(2026)Yuan, Su, Zhang, Nian, and Zhao]{yuan2026hiddenerror}
+Aojie Yuan, Zhiyuan~Julian Su, Haiyue Zhang, Yi~Nian, and Yue Zhao.
+\newblock Hidden error awareness in chain-of-thought reasoning: The signal is
+  diagnostic, not causal.
+\newblock \emph{arXiv preprint arXiv:2605.09502}, 2026.
+\newblock URL \url{https://arxiv.org/abs/2605.09502}.
+
+\bibitem[Zheng et~al.(2025)Zheng, Zhang, Zhang, Lin, Lu, Yu, Liu, Zhou, and
+  Lin]{zheng2025processbench}
+Chujie Zheng, Zhenru Zhang, Beichen Zhang, Runji Lin, Keming Lu, Bowen Yu,
+  Dayiheng Liu, Jingren Zhou, and Junyang Lin.
+\newblock {ProcessBench}: Identifying process errors in mathematical reasoning.
+\newblock In \emph{Proceedings of the 63rd Annual Meeting of the Association
+  for Computational Linguistics}, pages 987--1011. Association for
+  Computational Linguistics, 2025.
+\newblock \doi{10.18653/v1/2025.acl-long.50}.
+\newblock URL \url{https://aclanthology.org/2025.acl-long.50/}.
+
+\end{thebibliography}

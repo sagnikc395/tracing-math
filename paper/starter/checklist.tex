@@ -19,8 +19,9 @@
 \item {\bf Limitations}
     \item[] Question: Does the paper discuss the limitations of the work performed by the authors?
     \item[] Answer: \answerYes{}
-    \item[] Justification: The final main-text section discusses one-model scope, shortcut
-    sensitivity, post-hoc analyses, the absence of preregistration, and the invalid causal assay.
+    \item[] Justification: Section~6 discusses one-model and one-split scope, shortcut
+    sensitivity, the post-hoc status of several analyses, the untested calibration question, and
+    the invalid causal assay.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper has no limitation while the answer \answerNo{} means that the paper has limitations, but those are not discussed in the paper. 
@@ -121,10 +122,10 @@
 \item {\bf Experiments compute resources}
     \item[] Question: For each experiment, does the paper provide sufficient information on the computer resources (type of compute workers, memory, time of execution) needed to reproduce the experiments?
     \item[] Answer: \answerYes{}
-    \item[] Justification: Appendix~D, Table~\ref{tab:compute} records the GPU model, precision,
-    batch size, approximate per-stage compute, and storage footprint. Exact wall-clock logs for
-    the original extraction were not preserved; the paper states the order of magnitude instead of
-    inventing precision.
+    \item[] Justification: Appendix~\ref{app:repro} records the GPU model, precision, and batch
+    size for extraction, and states that probe fitting and every audit reported here run on CPU.
+    Exact wall-clock logs for the original extraction were not preserved, so the paper gives the
+    hardware and settings rather than inventing a runtime figure.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
@@ -177,9 +178,9 @@
 \item {\bf Licenses for existing assets}
     \item[] Question: Are the creators or original owners of assets (e.g., code, data, models), used in the paper, properly credited and are the license and terms of use explicitly mentioned and properly respected?
     \item[] Answer: \answerYes{}
-    \item[] Justification: Appendix~D, Table~\ref{tab:compute} records the Apache 2.0 licenses of
-    the ProcessBench dataset and the Qwen model, and notes that the benchmark's constituent
-    sources retain their original terms; the paper also cites both upstream artifacts.
+    \item[] Justification: The paper cites the \dataset{} benchmark and the Qwen model, and
+    Appendix~\ref{app:repro} states that dataset and model use follows the licenses published by
+    those sources, whose constituent benchmarks retain their original terms.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not use existing assets.
